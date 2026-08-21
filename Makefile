@@ -15,5 +15,5 @@ ClockCustomizer_FRAMEWORKS = UIKit CoreGraphics QuartzCore CoreText
 include $(THEOS_MAKE_PATH)/tweak.mk
 
 # Preferences bundle (shown inside Settings.app)
-SUBPROJECTS += ClockCustomizerPrefs
+SUBPROJECTS += ClockCustomizerPrefs.bundle
 include $(THEOS_MAKE_PATH)/aggregate.mk
