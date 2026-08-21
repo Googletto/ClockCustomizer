@@ -1,1 +1,11 @@
-Package:%20com.yourname.clockcustomizer%0AName%3A%20ClockCustomizer%0AVersion%3A%201.0.0%0AArchitecture%3A%20iphoneos-arm64%0ADescription%3A%20Change%20the%20lock%20screen%20clock%20font%20and%20toggle%20seconds%20display.%0AMaintainer%3A%20Your%20Name%0AAuthor%3A%20Your%20Name%0ASection%3A%20Tweaks%0ADepends%3A%20firmware%20(%3E=%2017.0),%20mobilesubstrate,%20preferenceloader%0AConflicts%3A%0AHomepage%3A%20https%3A//example.com
+Package: com.yourname.clockcustomizer
+Name: ClockCustomizer
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: Change the lock screen clock font and toggle seconds display.
+Maintainer: Your Name
+Author: Your Name
+Section: Tweaks
+Depends: firmware (>= 17.0), mobilesubstrate, preferenceloader
+Conflicts:
+Homepage: https://example.com
