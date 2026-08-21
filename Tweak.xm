@@ -49,6 +49,8 @@ static void ReloadPrefs(void) {
     gDebugLogging = prefs[@"DebugLogging"] ? [prefs[@"DebugLogging"] boolValue] : NO;
 }
 
+static NSString * const kDebugLogPath = @"/var/jb/var/mobile/Library/ClockCustomizer/debug.log";
+
 static void DebugLog(NSString *fmt, ...) {
     if (!gDebugLogging) return;
     va_list args;
@@ -56,6 +58,22 @@ static void DebugLog(NSString *fmt, ...) {
     NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
     va_end(args);
     NSLog(@"[ClockCustomizer] %@", msg);
+
+    // Also write to a plain text file so it can be read with Filza — no
+    // computer or syslog tool required.
+    NSString *line = [NSString stringWithFormat:@"%@  %@\n", [NSDate date], msg];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [kDebugLogPath stringByDeletingLastPathComponent];
+    if (![fm fileExistsAtPath:dir]) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    if (![fm fileExistsAtPath:kDebugLogPath]) {
+        [fm createFileAtPath:kDebugLogPath contents:nil attributes:nil];
+    }
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:kDebugLogPath];
+    [fh seekToEndOfFile];
+    [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+    [fh closeFile];
 }
 
 // Registers every font file found in kCustomFontsDirectory for THIS process
@@ -203,6 +221,12 @@ static void ReloadPrefsAndFonts(void) {
 
 %ctor {
     ReloadPrefsAndFonts();
+    if (gDebugLogging) {
+        Class cls = NSClassFromString(@"CSLockScreenLiveClockView");
+        DebugLog(@"ClockCustomizer loaded on iOS %@. CSLockScreenLiveClockView is %@.",
+                 [[UIDevice currentDevice] systemVersion],
+                 cls ? @"FOUND at load time" : @"NOT FOUND — wrong class name for this build");
+    }
     // Live-reload prefs (and re-scan the custom fonts folder) without a
     // respring whenever the Settings toggle/font picker changes.
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
