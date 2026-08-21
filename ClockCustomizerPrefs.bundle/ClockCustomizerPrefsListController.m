@@ -109,8 +109,8 @@ static NSString * const kCustomFontsDirectory = @"/var/jb/var/mobile/Library/Clo
         [fontPicker setProperty:@"com.yourname.clockcustomizer" forKey:@"defaults"];
         [fontPicker setProperty:@"HelveticaNeue-Thin" forKey:@"default"];
         [fontPicker setProperty:@"com.yourname.clockcustomizer/reload" forKey:@"PostNotification"];
-        [fontPicker setValues:fontValues];
-        [fontPicker setTitles:fontTitles];
+        [fontPicker setProperty:fontValues forKey:@"values"];
+        [fontPicker setProperty:fontTitles forKey:@"titles"];
         [specifiers addObject:fontPicker];
 
         // --- Group: Debug ---
