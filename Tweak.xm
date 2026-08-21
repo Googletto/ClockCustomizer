@@ -123,6 +123,12 @@ static void DumpIvarsOnce(Class cls) {
     free(ivars);
 }
 
+// Tell the compiler this private class is a UIView subclass — we don't have
+// Apple's real header for it, but this is enough for it to know about
+// inherited members like `.window` and `class]`.
+@interface CSLockScreenLiveClockView : UIView
+@end
+
 %hook CSLockScreenLiveClockView
 
 - (void)didMoveToWindow {
