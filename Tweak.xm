@@ -219,6 +219,30 @@ static void ReloadPrefsAndFonts(void) {
     RegisterCustomFonts();
 }
 
+// Scans every Objective-C class currently loaded in this process and logs
+// any whose name contains the given substring — used to find the real
+// private class name for the lock screen clock on this specific device/build.
+static void LogClassesContaining(NSString *substring) {
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    NSMutableArray *matches = [NSMutableArray array];
+    for (unsigned int i = 0; i < count; i++) {
+        NSString *name = NSStringFromClass(classes[i]);
+        if ([name rangeOfString:substring options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            Class superclass = class_getSuperclass(classes[i]);
+            [matches addObject:[NSString stringWithFormat:@"%@  (superclass: %@)",
+                                 name, superclass ? NSStringFromClass(superclass) : @"none"]];
+        }
+    }
+    free(classes);
+    [matches sortUsingSelector:@selector(compare:)];
+    DebugLog(@"---- %lu classes matching '%@' ----", (unsigned long)matches.count, substring);
+    for (NSString *line in matches) {
+        DebugLog(@"  %@", line);
+    }
+    DebugLog(@"---- end of matches ----");
+}
+
 %ctor {
     ReloadPrefsAndFonts();
     if (gDebugLogging) {
@@ -226,6 +250,10 @@ static void ReloadPrefsAndFonts(void) {
         DebugLog(@"ClockCustomizer loaded on iOS %@. CSLockScreenLiveClockView is %@.",
                  [[UIDevice currentDevice] systemVersion],
                  cls ? @"FOUND at load time" : @"NOT FOUND — wrong class name for this build");
+        if (!cls) {
+            LogClassesContaining(@"Clock");
+        }
+    }
     }
     // Live-reload prefs (and re-scan the custom fonts folder) without a
     // respring whenever the Settings toggle/font picker changes.
