@@ -10,5 +10,6 @@ ClockCustomizerPrefs_FILES = ClockCustomizerPrefsListController.m
 ClockCustomizerPrefs_CFLAGS = -fobjc-arc
 ClockCustomizerPrefs_INSTALL_PATH = /Library/PreferenceBundles
 ClockCustomizerPrefs_FRAMEWORKS = UIKit CoreGraphics CoreText
+ClockCustomizerPrefs_LDFLAGS = -Wl,-undefined,dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/bundle.mk
