@@ -141,18 +141,18 @@ static void LogViewClassesContaining(NSString *substring) {
 }
 
 static void RunFullDiagnosticScan(void) {
-    Class cls = NSClassFromString(@"CSLockScreenLiveClockView");
-    DebugLog(@"CSLockScreenLiveClockView is %@.", cls ? @"FOUND" : @"NOT FOUND");
+    Class cls = NSClassFromString(@"SBFLockScreenDateView");
+    DebugLog(@"SBFLockScreenDateView is %@.", cls ? @"FOUND" : @"NOT FOUND");
     if (cls) return;
     LogViewClassesContaining(@"Lock");
     LogViewClassesContaining(@"CoverSheet");
     LogViewClassesContaining(@"Dashboard");
 }
 
-@interface CSLockScreenLiveClockView : UIView
+@interface SBFLockScreenDateView : UIView
 @end
 
-%hook CSLockScreenLiveClockView
+%hook SBFLockScreenDateView
 
 - (void)didMoveToWindow {
     %orig;
