@@ -198,11 +198,13 @@ static void DumpIvarsOnce(Class cls) {
 
 - (CGRect)frame {
     CGRect orig = %orig;
-    return CGRectMake(orig.origin.x, 5, orig.size.width, orig.size.height);
+    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+    return CGRectMake(0, 5, screenWidth, orig.size.height);
 }
 
 - (void)setFrame:(CGRect)frame {
-    %orig(CGRectMake(frame.origin.x, 5, frame.size.width, frame.size.height));
+    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+    %orig(CGRectMake(0, 5, screenWidth, frame.size.height));
 }
 
 - (UIFont *)primaryFont {
@@ -260,6 +262,9 @@ static void DumpIvarsOnce(Class cls) {
     if ([textLabel respondsToSelector:@selector(setNumberOfLines:)]) {
         [textLabel setNumberOfLines:1];
     }
+    if ([textLabel respondsToSelector:@selector(setTextAlignment:)]) {
+        [textLabel setTextAlignment:NSTextAlignmentCenter];
+    }
 
     __weak id weakLabel = textLabel;
     __weak __typeof(self) weakSelf = self;
@@ -287,7 +292,7 @@ static void DumpIvarsOnce(Class cls) {
     // requiring the clock view to be recreated (which doesn't reliably
     // happen on every lock/unlock).
     tick();
-    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:1.0
+    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.25
                                                        repeats:YES
                                                          block:^(NSTimer * _Nonnull t) { tick(); }];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
