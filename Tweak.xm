@@ -6,13 +6,11 @@
 // (https://github.com/NightwindDev/old-lockscreen, MIT licensed), which
 // restores the iOS 15-style lock screen clock layout on iOS 16/17. That
 // project's hooks are the proven, working baseline on this device — this
-// file keeps its layout/positioning fixes and adds a configurable font and
-// a "show seconds" feature on top.
+// file keeps its layout/positioning fixes and adds a font and a "show
+// seconds" feature on top.
 //
 // IMPORTANT: this REPLACES NightwindDev's original tweak rather than
-// running alongside it — installing this while the original is also
-// installed means two tweaks fighting over the same private methods.
-// Uninstall the original before installing this one.
+// running alongside it. Uninstall the original before installing this one.
 
 #import <UIKit/UIKit.h>
 #import <CoreText/CoreText.h>
@@ -29,6 +27,7 @@ static NSString * const kDebugLogPath = @"/var/jb/var/mobile/Library/ClockCustom
 static BOOL gShowSeconds = NO;
 static NSString *gFontName = nil;
 static BOOL gDebugLogging = NO;
+static NSString *gRegisteredCustomFontName = nil; // real PostScript name, auto-detected on registration
 
 static void EnsureFontsDirectoryExists(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -80,18 +79,40 @@ static void RegisterCustomFonts(void) {
         if (![validExtensions containsObject:filename.pathExtension.lowercaseString]) continue;
         NSString *fullPath = [kCustomFontsDirectory stringByAppendingPathComponent:filename];
         NSURL *url = [NSURL fileURLWithPath:fullPath];
+
+        NSDictionary *attrs = [fm attributesOfItemAtPath:fullPath error:nil];
+        DebugLog(@"Font file %@ is %@ bytes", filename, attrs[NSFileSize]);
+
         CFErrorRef error = NULL;
-        CTFontManagerRegisterFontsForURL((__bridge CFURLRef)url, kCTFontManagerScopeProcess, &error);
-        if (error) {
+        BOOL ok = CTFontManagerRegisterFontsForURL((__bridge CFURLRef)url, kCTFontManagerScopeProcess, &error);
+        if (!ok || error) {
             DebugLog(@"Failed to register custom font %@: %@", filename, error);
-            CFRelease(error);
+            if (error) CFRelease(error);
+            continue;
         }
+
+        // Look up the real PostScript name so we can pass it to
+        // +[UIFont fontWithName:] later — it may not match the filename.
+        CFArrayRef descriptors = CTFontManagerCreateFontDescriptorsFromURL((__bridge CFURLRef)url);
+        if (descriptors && CFArrayGetCount(descriptors) > 0) {
+            CTFontDescriptorRef desc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descriptors, 0);
+            CFStringRef psNameRef = CTFontDescriptorCopyAttribute(desc, kCTFontNameAttribute);
+            if (psNameRef) {
+                gRegisteredCustomFontName = (__bridge_transfer NSString *)psNameRef;
+                DebugLog(@"Registered %@ as font name: %@", filename, gRegisteredCustomFontName);
+            }
+        }
+        if (descriptors) CFRelease(descriptors);
     }
 }
 
 // Our chosen font at the given size if one is set, otherwise the classic
 // thin system font old-lockscreen used by default.
 static UIFont *TimeFontAtSize(CGFloat size) {
+    if (gRegisteredCustomFontName.length > 0) {
+        UIFont *custom = [UIFont fontWithName:gRegisteredCustomFontName size:size];
+        if (custom) return custom;
+    }
     if (gFontName.length > 0) {
         UIFont *custom = [UIFont fontWithName:gFontName size:size];
         if (custom) return custom;
@@ -215,6 +236,28 @@ static void DumpIvarsOnce(Class cls) {
                  textLabel ? NSStringFromClass([textLabel class]) : @"nil");
         if (gDebugLogging) DumpClassMethodsIfExists(NSStringFromClass([self class]));
         return;
+    }
+
+    // Apply our font directly to the same object we already know works for
+    // text, rather than relying on primaryFont/customTimeFont, which don't
+    // seem to affect actual rendering on this build.
+    CGFloat currentSize = kDefaultTimeFontSize;
+    @try {
+        UIFont *existingFont = [textLabel respondsToSelector:@selector(font)] ? [textLabel performSelector:@selector(font)] : nil;
+        if ([existingFont isKindOfClass:[UIFont class]]) currentSize = existingFont.pointSize;
+    } @catch (__unused NSException *e) {}
+    [textLabel setFont:TimeFontAtSize(currentSize)];
+
+    // Prevent the label from shrinking the font when "HH:mm:ss" is longer
+    // than "HH:mm".
+    if ([textLabel respondsToSelector:@selector(setAdjustsFontSizeToFitWidth:)]) {
+        [textLabel setAdjustsFontSizeToFitWidth:NO];
+    }
+    if ([textLabel respondsToSelector:@selector(setMinimumScaleFactor:)]) {
+        [textLabel setMinimumScaleFactor:1.0];
+    }
+    if ([textLabel respondsToSelector:@selector(setNumberOfLines:)]) {
+        [textLabel setNumberOfLines:1];
     }
 
     __weak id weakLabel = textLabel;
