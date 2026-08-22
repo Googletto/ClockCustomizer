@@ -13,26 +13,12 @@ static NSString * const kCustomFontsDirectory = @"/var/jb/var/mobile/Library/Clo
         // --- Group: About ---
         PSSpecifier *groupTop = [PSSpecifier groupSpecifierWithName:@"ClockCustomizer"];
         [groupTop setProperty:[NSString stringWithFormat:
-            @"The lock screen font is picked up automatically from the first font file found in "
-             "%@ — drop in a .ttf/.otf/.ttc file (via Filza or SSH), then lock/unlock your phone once.",
+            @"The lock screen shows seconds and picks up its font automatically from the first font "
+             "file found in %@ — drop in a .ttf/.otf/.ttc file (via Filza or SSH), then lock/unlock "
+             "your phone once.",
              kCustomFontsDirectory]
                         forKey:@"footerText"];
         [specifiers addObject:groupTop];
-
-        // --- Show Seconds toggle ---
-        PSSpecifier *secondsSwitch = [PSSpecifier
-            preferenceSpecifierNamed:@"Show Seconds"
-            target:self
-            set:@selector(setPreferenceValue:specifier:)
-            get:@selector(readPreferenceValue:)
-            detail:nil
-            cell:PSSwitchCell
-            edit:nil];
-        [secondsSwitch setProperty:@"ShowSeconds" forKey:@"key"];
-        [secondsSwitch setProperty:@"com.yourname.clockcustomizer" forKey:@"defaults"];
-        [secondsSwitch setProperty:@(NO) forKey:@"default"];
-        [secondsSwitch setProperty:@"com.yourname.clockcustomizer/reload" forKey:@"PostNotification"];
-        [specifiers addObject:secondsSwitch];
 
         // --- Group: Debug ---
         PSSpecifier *groupDebug = [PSSpecifier groupSpecifierWithName:@"Troubleshooting"];
