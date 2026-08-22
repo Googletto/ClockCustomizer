@@ -76,12 +76,15 @@ static void RegisterCustomFonts(void) {
 static NSArray *kTimeLabelIvarCandidates = nil;
 static NSArray *kDateLabelIvarCandidates = nil;
 
-static UILabel *FindLabelForIvarNames(id target, NSArray *candidates) {
+// Accepts anything with text/font (UILabel, or private label-like classes
+// such as SBUILegibilityLabel) rather than requiring the exact UILabel class.
+static id FindLabelForIvarNames(id target, NSArray *candidates) {
     for (NSString *name in candidates) {
         @try {
             id value = [target valueForKey:name];
-            if ([value isKindOfClass:[UILabel class]]) {
-                return (UILabel *)value;
+            if ([value respondsToSelector:@selector(setText:)] &&
+                [value respondsToSelector:@selector(setFont:)]) {
+                return value;
             }
         } @catch (__unused NSException *e) {
         }
@@ -117,9 +120,6 @@ static BOOL IsUIViewSubclass(Class cls) {
     return NO;
 }
 
-// Logs every loaded UIView subclass whose name contains the given
-// substring — filtered to UIView so we don't drown in thousands of
-// unrelated NSLock/os_unfair_lock-type matches on broad terms like "Lock".
 static void LogViewClassesContaining(NSString *substring) {
     unsigned int count = 0;
     Class *classes = objc_copyClassList(&count);
@@ -169,29 +169,30 @@ static void RunFullDiagnosticScan(void) {
         return;
     }
 
-    UILabel *timeLabel = FindLabelForIvarNames(self, kTimeLabelIvarCandidates);
+    id timeLabel = FindLabelForIvarNames(self, kTimeLabelIvarCandidates);
     if (!timeLabel) {
         DebugLog(@"Could not find time label on %@", NSStringFromClass([self class]));
         return;
     }
 
     if (gFontName.length > 0) {
-        UIFont *newFont = [UIFont fontWithName:gFontName size:timeLabel.font.pointSize];
+        CGFloat currentSize = ((UIFont *)[timeLabel font]).pointSize;
+        UIFont *newFont = [UIFont fontWithName:gFontName size:currentSize];
         if (newFont) {
-            timeLabel.font = newFont;
+            [timeLabel setFont:newFont];
         } else {
             DebugLog(@"Font '%@' not found on device.", gFontName);
         }
     }
 
-    __weak UILabel *weakLabel = timeLabel;
+    __weak id weakLabel = timeLabel;
     __weak __typeof(self) weakSelf = self;
 
     NSTimer *existing = objc_getAssociatedObject(self, @selector(didMoveToWindow));
     [existing invalidate];
 
     void (^tick)(void) = ^{
-        UILabel *label = weakLabel;
+        id label = weakLabel;
         __typeof(self) strongSelf = weakSelf;
         if (!label || !strongSelf) return;
         NSDateFormatter *df = [NSDateFormatter new];
@@ -200,7 +201,7 @@ static void RunFullDiagnosticScan(void) {
             [[NSDateFormatter dateFormatFromTemplate:@"j" options:0 locale:[NSLocale currentLocale]] containsString:@"a"]) {
             df.dateFormat = gShowSeconds ? @"h:mm:ss a" : @"h:mm a";
         }
-        label.text = [df stringFromDate:[NSDate date]];
+        [label setText:[df stringFromDate:[NSDate date]]];
     };
 
     if (gShowSeconds) {
