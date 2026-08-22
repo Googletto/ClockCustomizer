@@ -229,8 +229,8 @@ static void DumpIvarsOnce(Class cls) {
         if (!label || !strongSelf) return;
         NSDateFormatter *df = [NSDateFormatter new];
         df.dateFormat = gShowSeconds ? @"HH:mm:ss" : @"HH:mm";
-        NSString *template = [NSDateFormatter dateFormatFromTemplate:@"j" options:0 locale:[NSLocale currentLocale]];
-        if (template && [template containsString:@"a"]) {
+        NSString *timeTemplate = [NSDateFormatter dateFormatFromTemplate:@"j" options:0 locale:[NSLocale currentLocale]];
+        if (timeTemplate && [timeTemplate containsString:@"a"]) {
             df.dateFormat = gShowSeconds ? @"h:mm:ss a" : @"h:mm a";
         }
         [label setText:[df stringFromDate:[NSDate date]]];
