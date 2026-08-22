@@ -2,15 +2,25 @@
 //
 // Target: iOS 17.0–17.3, rootless jailbreak (Dopamine 3 / ellekit)
 //
-// This build's approach to the font is based on the technique documented by
-// NightwindDev/old-lockscreen (https://github.com/NightwindDev/old-lockscreen):
-// SBFLockScreenDateView exposes -customTimeFont / -setCustomTimeFont: as the
-// real, supported override point for the lock screen clock's font — far more
-// reliable than reaching into a private label ivar directly.
+// This is a fork/extension of NightwindDev/old-lockscreen
+// (https://github.com/NightwindDev/old-lockscreen, MIT licensed), which
+// restores the iOS 15-style lock screen clock layout on iOS 16/17. That
+// project's hooks are the proven, working baseline on this device — this
+// file keeps its layout/positioning fixes and adds a configurable font and
+// a "show seconds" feature on top.
+//
+// IMPORTANT: this REPLACES NightwindDev's original tweak rather than
+// running alongside it — installing this while the original is also
+// installed means two tweaks fighting over the same private methods.
+// Uninstall the original before installing this one.
 
 #import <UIKit/UIKit.h>
 #import <CoreText/CoreText.h>
 #import <objc/runtime.h>
+
+#define kSubtitlePadding 102
+#define kDefaultTimeFontSize 80
+#define kDateFontSize 22
 
 static NSString * const kPrefsPath = @"/var/jb/var/mobile/Library/Preferences/com.yourname.clockcustomizer.plist";
 static NSString * const kCustomFontsDirectory = @"/var/jb/var/mobile/Library/ClockCustomizer/Fonts";
@@ -79,16 +89,16 @@ static void RegisterCustomFonts(void) {
     }
 }
 
-// Returns our chosen font at the given size, or nil if no custom font is set
-// (in which case the caller should fall back to the original/system font).
-static UIFont *CustomTimeFontOrNil(CGFloat sizeHint) {
-    if (gFontName.length == 0) return nil;
-    CGFloat size = sizeHint > 0 ? sizeHint : 80;
-    return [UIFont fontWithName:gFontName size:size];
+// Our chosen font at the given size if one is set, otherwise the classic
+// thin system font old-lockscreen used by default.
+static UIFont *TimeFontAtSize(CGFloat size) {
+    if (gFontName.length > 0) {
+        UIFont *custom = [UIFont fontWithName:gFontName size:size];
+        if (custom) return custom;
+    }
+    return [UIFont systemFontOfSize:size weight:UIFontWeightThin];
 }
 
-// Dumps every method on a class by name, WITHOUT needing a live instance —
-// works immediately at load time, no lock/unlock cycle required.
 static void DumpClassMethodsIfExists(NSString *className) {
     Class cls = NSClassFromString(className);
     if (!cls) {
@@ -110,59 +120,186 @@ static void DumpClassMethodsIfExists(NSString *className) {
     DebugLog(@"---- end ----");
 }
 
-static BOOL IsUIViewSubclass(Class cls) {
-    Class c = cls;
-    while (c) {
-        if (c == [UIView class]) return YES;
-        c = class_getSuperclass(c);
-    }
-    return NO;
-}
+static void DumpIvarsOnce(Class cls) {
+    static NSMutableSet *dumped;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ dumped = [NSMutableSet new]; });
+    NSString *clsName = NSStringFromClass(cls);
+    if ([dumped containsObject:clsName]) return;
+    [dumped addObject:clsName];
 
-static void LogViewClassesContaining(NSString *substring) {
     unsigned int count = 0;
-    Class *classes = objc_copyClassList(&count);
-    NSMutableArray *matches = [NSMutableArray array];
+    Ivar *ivars = class_copyIvarList(cls, &count);
+    DebugLog(@"---- Ivars for %@ ----", clsName);
     for (unsigned int i = 0; i < count; i++) {
-        NSString *name = NSStringFromClass(classes[i]);
-        if ([name rangeOfString:substring options:NSCaseInsensitiveSearch].location != NSNotFound &&
-            IsUIViewSubclass(classes[i])) {
-            [matches addObject:name];
-        }
+        const char *name = ivar_getName(ivars[i]);
+        const char *type = ivar_getTypeEncoding(ivars[i]);
+        DebugLog(@"  %s  (%s)", name, type);
     }
-    free(classes);
-    [matches sortUsingSelector:@selector(compare:)];
-    DebugLog(@"---- %lu UIView subclasses matching '%@' ----", (unsigned long)matches.count, substring);
-    for (NSString *line in matches) {
-        DebugLog(@"  %@", line);
-    }
-    DebugLog(@"---- end ----");
+    free(ivars);
 }
 
-static void RunFullDiagnosticScan(void) {
-    Class cls = NSClassFromString(@"SBFLockScreenDateView");
-    DebugLog(@"SBFLockScreenDateView is %@.", cls ? @"FOUND" : @"NOT FOUND");
+// --- Interfaces for the private classes involved (from old-lockscreen) ---
 
-    LogViewClassesContaining(@"Prominent");
-    DumpClassMethodsIfExists(@"CSProminentTimeView");
-    DumpClassMethodsIfExists(@"CSProminentTextElementView");
-    DumpClassMethodsIfExists(@"CSProminentSubtitleDateView");
-}
-
+@interface CSProminentSubtitleDateView : UIView
+@end
+@interface CSProminentEmptyElementView : UIView
+@end
+@interface CSProminentTextElementView : UIView
+@end
+@interface CSProminentTimeView : CSProminentTextElementView
+@end
 @interface SBFLockScreenDateView : UIView
 @end
 
+// --- Clock font (the class that owns the big time display) ---
+
 %hook SBFLockScreenDateView
 
++ (UIFont *)timeFont {
+    return TimeFontAtSize(kDefaultTimeFontSize);
+}
+
 - (UIFont *)customTimeFont {
-    UIFont *orig = %orig;
-    UIFont *custom = CustomTimeFontOrNil(orig ? orig.pointSize : 80);
-    return custom ?: orig;
+    return TimeFontAtSize(kDefaultTimeFontSize);
 }
 
 - (void)setCustomTimeFont:(UIFont *)customTimeFont {
-    UIFont *custom = CustomTimeFontOrNil(customTimeFont ? customTimeFont.pointSize : 80);
-    %orig(custom ?: customTimeFont);
+    %orig(TimeFontAtSize(kDefaultTimeFontSize));
+}
+
+%end
+
+// --- Time text itself ---
+
+%hook CSProminentTimeView
+
+- (CGRect)frame {
+    CGRect orig = %orig;
+    return CGRectMake(orig.origin.x, 5, orig.size.width, orig.size.height);
+}
+
+- (void)setFrame:(CGRect)frame {
+    %orig(CGRectMake(frame.origin.x, 5, frame.size.width, frame.size.height));
+}
+
+- (UIFont *)primaryFont {
+    return TimeFontAtSize(kDefaultTimeFontSize);
+}
+
+- (void)setPrimaryFont:(UIFont *)primaryFont {
+    %orig(TimeFontAtSize(kDefaultTimeFontSize));
+}
+
+// Mirrors CSProminentSubtitleDateView's proven _textLabel technique below —
+// CSProminentTimeView is a sibling subclass of the same base class, so it
+// likely has the same ivar. If Debug Logging is on and it's missing, we log
+// diagnostics instead of guessing further.
+- (void)didMoveToWindow {
+    %orig;
+    if (gDebugLogging) DumpIvarsOnce([self class]);
+
+    if (self.window == nil) {
+        NSTimer *t = objc_getAssociatedObject(self, @selector(didMoveToWindow));
+        [t invalidate];
+        objc_setAssociatedObject(self, @selector(didMoveToWindow), nil, OBJC_ASSOCIATION_RETAIN);
+        return;
+    }
+
+    id textLabel = nil;
+    @try { textLabel = [self valueForKey:@"_textLabel"]; } @catch (__unused NSException *e) {}
+
+    BOOL usable = [textLabel respondsToSelector:@selector(setText:)];
+    if (!usable) {
+        DebugLog(@"CSProminentTimeView _textLabel not usable (class: %@)",
+                 textLabel ? NSStringFromClass([textLabel class]) : @"nil");
+        if (gDebugLogging) DumpClassMethodsIfExists(NSStringFromClass([self class]));
+        return;
+    }
+
+    __weak id weakLabel = textLabel;
+    __weak __typeof(self) weakSelf = self;
+
+    NSTimer *existing = objc_getAssociatedObject(self, @selector(didMoveToWindow));
+    [existing invalidate];
+
+    void (^tick)(void) = ^{
+        id label = weakLabel;
+        __typeof(self) strongSelf = weakSelf;
+        if (!label || !strongSelf) return;
+        NSDateFormatter *df = [NSDateFormatter new];
+        df.dateFormat = gShowSeconds ? @"HH:mm:ss" : @"HH:mm";
+        NSString *template = [NSDateFormatter dateFormatFromTemplate:@"j" options:0 locale:[NSLocale currentLocale]];
+        if (template && [template containsString:@"a"]) {
+            df.dateFormat = gShowSeconds ? @"h:mm:ss a" : @"h:mm a";
+        }
+        [label setText:[df stringFromDate:[NSDate date]]];
+    };
+
+    if (gShowSeconds) {
+        tick();
+        NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                           repeats:YES
+                                                             block:^(NSTimer * _Nonnull t) { tick(); }];
+        [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+        objc_setAssociatedObject(self, @selector(didMoveToWindow), timer, OBJC_ASSOCIATION_RETAIN);
+    }
+}
+
+%end
+
+// --- Date subtitle (e.g. "Tuesday, August 22") ---
+
+%hook CSProminentSubtitleDateView
+
+- (CGRect)frame {
+    CGRect orig = %orig;
+    return CGRectMake(orig.origin.x, kSubtitlePadding, orig.size.width, orig.size.height);
+}
+
+- (void)setFrame:(CGRect)frame {
+    %orig(CGRectMake(frame.origin.x, kSubtitlePadding, frame.size.width, frame.size.height));
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    UILabel *textLabel = [self valueForKey:@"_textLabel"];
+    [textLabel setFont:[UIFont systemFontOfSize:kDateFontSize weight:UIFontWeightRegular]];
+}
+
+%end
+
+// --- Miscellaneous elements around the clock (battery charging text, etc.) ---
+
+%hook CSProminentEmptyElementView
+
+- (CGRect)frame {
+    CGRect orig = %orig;
+    return CGRectMake(orig.origin.x, kSubtitlePadding, orig.size.width, orig.size.height);
+}
+
+- (void)setFrame:(CGRect)frame {
+    %orig(CGRectMake(frame.origin.x, kSubtitlePadding, frame.size.width, frame.size.height));
+}
+
+%end
+
+%hook CSProminentTextElementView
+
+- (CGRect)frame {
+    if (![self isKindOfClass:%c(CSProminentTimeView)]) {
+        CGRect orig = %orig;
+        return CGRectMake(orig.origin.x, kSubtitlePadding, orig.size.width, orig.size.height);
+    }
+    return %orig;
+}
+
+- (void)setFrame:(CGRect)frame {
+    if (![self isKindOfClass:%c(CSProminentTimeView)]) {
+        %orig(CGRectMake(frame.origin.x, kSubtitlePadding, frame.size.width, frame.size.height));
+    } else {
+        %orig;
+    }
 }
 
 %end
@@ -170,17 +307,12 @@ static void RunFullDiagnosticScan(void) {
 static void ReloadPrefsAndFonts(void) {
     ReloadPrefs();
     RegisterCustomFonts();
-    if (gDebugLogging) {
-        DebugLog(@"[Settings changed]");
-        RunFullDiagnosticScan();
-    }
 }
 
 %ctor {
     ReloadPrefsAndFonts();
     if (gDebugLogging) {
-        DebugLog(@"ClockCustomizer loaded on iOS %@.", [[UIDevice currentDevice] systemVersion]);
-        RunFullDiagnosticScan();
+        DebugLog(@"ClockCustomizer (old-lockscreen fork) loaded on iOS %@.", [[UIDevice currentDevice] systemVersion]);
     }
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
                                      NULL,
