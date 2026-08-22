@@ -6,11 +6,13 @@
 // (https://github.com/NightwindDev/old-lockscreen, MIT licensed), which
 // restores the iOS 15-style lock screen clock layout on iOS 16/17. That
 // project's hooks are the proven, working baseline on this device — this
-// file keeps its layout/positioning fixes and adds a font and a "show
-// seconds" feature on top.
+// file keeps its layout/positioning fixes and adds a configurable font and
+// a "show seconds" feature on top.
 //
 // IMPORTANT: this REPLACES NightwindDev's original tweak rather than
-// running alongside it. Uninstall the original before installing this one.
+// running alongside it — installing this while the original is also
+// installed means two tweaks fighting over the same private methods.
+// Uninstall the original before installing this one.
 
 #import <UIKit/UIKit.h>
 #import <CoreText/CoreText.h>
@@ -96,7 +98,7 @@ static void RegisterCustomFonts(void) {
         CFArrayRef descriptors = CTFontManagerCreateFontDescriptorsFromURL((__bridge CFURLRef)url);
         if (descriptors && CFArrayGetCount(descriptors) > 0) {
             CTFontDescriptorRef desc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descriptors, 0);
-            CFStringRef psNameRef = CTFontDescriptorCopyAttribute(desc, kCTFontNameAttribute);
+            CFStringRef psNameRef = (CFStringRef)CTFontDescriptorCopyAttribute(desc, kCTFontNameAttribute);
             if (psNameRef) {
                 gRegisteredCustomFontName = (__bridge_transfer NSString *)psNameRef;
                 DebugLog(@"Registered %@ as font name: %@", filename, gRegisteredCustomFontName);
