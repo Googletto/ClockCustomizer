@@ -1,6 +1,12 @@
 // ClockCustomizer — Tweak.xm
 //
 // Target: iOS 17.0–17.3, rootless jailbreak (Dopamine 3 / ellekit)
+//
+// This build's approach to the font is based on the technique documented by
+// NightwindDev/old-lockscreen (https://github.com/NightwindDev/old-lockscreen):
+// SBFLockScreenDateView exposes -customTimeFont / -setCustomTimeFont: as the
+// real, supported override point for the lock screen clock's font — far more
+// reliable than reaching into a private label ivar directly.
 
 #import <UIKit/UIKit.h>
 #import <CoreText/CoreText.h>
@@ -73,42 +79,35 @@ static void RegisterCustomFonts(void) {
     }
 }
 
-static NSArray *kTimeLabelIvarCandidates = nil;
-static NSArray *kDateLabelIvarCandidates = nil;
-
-// Accepts anything with text/font (UILabel, or private label-like classes
-// such as SBUILegibilityLabel) rather than requiring the exact UILabel class.
-static id FindLabelForIvarNames(id target, NSArray *candidates) {
-    for (NSString *name in candidates) {
-        @try {
-            id value = [target valueForKey:name];
-            if ([value respondsToSelector:@selector(setText:)] &&
-                [value respondsToSelector:@selector(setFont:)]) {
-                return value;
-            }
-        } @catch (__unused NSException *e) {
-        }
-    }
-    return nil;
+// Returns our chosen font at the given size, or nil if no custom font is set
+// (in which case the caller should fall back to the original/system font).
+static UIFont *CustomTimeFontOrNil(CGFloat sizeHint) {
+    if (gFontName.length == 0) return nil;
+    CGFloat size = sizeHint > 0 ? sizeHint : 80;
+    return [UIFont fontWithName:gFontName size:size];
 }
 
-static void DumpIvarsOnce(Class cls) {
-    static NSMutableSet *dumped;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{ dumped = [NSMutableSet new]; });
-    NSString *clsName = NSStringFromClass(cls);
-    if ([dumped containsObject:clsName]) return;
-    [dumped addObject:clsName];
-
-    unsigned int count = 0;
-    Ivar *ivars = class_copyIvarList(cls, &count);
-    DebugLog(@"---- Ivars for %@ ----", clsName);
-    for (unsigned int i = 0; i < count; i++) {
-        const char *name = ivar_getName(ivars[i]);
-        const char *type = ivar_getTypeEncoding(ivars[i]);
-        DebugLog(@"  %s  (%s)", name, type);
+// Dumps every method on a class by name, WITHOUT needing a live instance —
+// works immediately at load time, no lock/unlock cycle required.
+static void DumpClassMethodsIfExists(NSString *className) {
+    Class cls = NSClassFromString(className);
+    if (!cls) {
+        DebugLog(@"Class %@ not found.", className);
+        return;
     }
-    free(ivars);
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    NSMutableArray *names = [NSMutableArray array];
+    for (unsigned int i = 0; i < count; i++) {
+        [names addObject:NSStringFromSelector(method_getName(methods[i]))];
+    }
+    free(methods);
+    [names sortUsingSelector:@selector(compare:)];
+    DebugLog(@"---- %lu methods on class %@ ----", (unsigned long)names.count, className);
+    for (NSString *n in names) {
+        DebugLog(@"  %@", n);
+    }
+    DebugLog(@"---- end ----");
 }
 
 static BOOL IsUIViewSubclass(Class cls) {
@@ -143,10 +142,11 @@ static void LogViewClassesContaining(NSString *substring) {
 static void RunFullDiagnosticScan(void) {
     Class cls = NSClassFromString(@"SBFLockScreenDateView");
     DebugLog(@"SBFLockScreenDateView is %@.", cls ? @"FOUND" : @"NOT FOUND");
-    if (cls) return;
-    LogViewClassesContaining(@"Lock");
-    LogViewClassesContaining(@"CoverSheet");
-    LogViewClassesContaining(@"Dashboard");
+
+    LogViewClassesContaining(@"Prominent");
+    DumpClassMethodsIfExists(@"CSProminentTimeView");
+    DumpClassMethodsIfExists(@"CSProminentTextElementView");
+    DumpClassMethodsIfExists(@"CSProminentSubtitleDateView");
 }
 
 @interface SBFLockScreenDateView : UIView
@@ -154,64 +154,15 @@ static void RunFullDiagnosticScan(void) {
 
 %hook SBFLockScreenDateView
 
-- (void)didMoveToWindow {
-    %orig;
-    if (!kTimeLabelIvarCandidates) {
-        kTimeLabelIvarCandidates = @[@"_timeLabel", @"timeLabel", @"_clockLabel", @"_timeTextLabel"];
-        kDateLabelIvarCandidates = @[@"_dateLabel", @"dateLabel"];
-    }
-    if (gDebugLogging) DumpIvarsOnce([self class]);
+- (UIFont *)customTimeFont {
+    UIFont *orig = %orig;
+    UIFont *custom = CustomTimeFontOrNil(orig ? orig.pointSize : 80);
+    return custom ?: orig;
+}
 
-    if (self.window == nil) {
-        NSTimer *t = objc_getAssociatedObject(self, @selector(didMoveToWindow));
-        [t invalidate];
-        objc_setAssociatedObject(self, @selector(didMoveToWindow), nil, OBJC_ASSOCIATION_RETAIN);
-        return;
-    }
-
-    id timeLabel = FindLabelForIvarNames(self, kTimeLabelIvarCandidates);
-    if (!timeLabel) {
-        DebugLog(@"Could not find time label on %@", NSStringFromClass([self class]));
-        return;
-    }
-
-    if (gFontName.length > 0) {
-        CGFloat currentSize = ((UIFont *)[timeLabel font]).pointSize;
-        UIFont *newFont = [UIFont fontWithName:gFontName size:currentSize];
-        if (newFont) {
-            [timeLabel setFont:newFont];
-        } else {
-            DebugLog(@"Font '%@' not found on device.", gFontName);
-        }
-    }
-
-    __weak id weakLabel = timeLabel;
-    __weak __typeof(self) weakSelf = self;
-
-    NSTimer *existing = objc_getAssociatedObject(self, @selector(didMoveToWindow));
-    [existing invalidate];
-
-    void (^tick)(void) = ^{
-        id label = weakLabel;
-        __typeof(self) strongSelf = weakSelf;
-        if (!label || !strongSelf) return;
-        NSDateFormatter *df = [NSDateFormatter new];
-        df.dateFormat = gShowSeconds ? @"HH:mm:ss" : @"HH:mm";
-        if ([NSDateFormatter dateFormatFromTemplate:@"j" options:0 locale:[NSLocale currentLocale]] &&
-            [[NSDateFormatter dateFormatFromTemplate:@"j" options:0 locale:[NSLocale currentLocale]] containsString:@"a"]) {
-            df.dateFormat = gShowSeconds ? @"h:mm:ss a" : @"h:mm a";
-        }
-        [label setText:[df stringFromDate:[NSDate date]]];
-    };
-
-    if (gShowSeconds) {
-        tick();
-        NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:1.0
-                                                           repeats:YES
-                                                             block:^(NSTimer * _Nonnull t) { tick(); }];
-        [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
-        objc_setAssociatedObject(self, @selector(didMoveToWindow), timer, OBJC_ASSOCIATION_RETAIN);
-    }
+- (void)setCustomTimeFont:(UIFont *)customTimeFont {
+    UIFont *custom = CustomTimeFontOrNil(customTimeFont ? customTimeFont.pointSize : 80);
+    %orig(custom ?: customTimeFont);
 }
 
 %end
@@ -230,14 +181,6 @@ static void ReloadPrefsAndFonts(void) {
     if (gDebugLogging) {
         DebugLog(@"ClockCustomizer loaded on iOS %@.", [[UIDevice currentDevice] systemVersion]);
         RunFullDiagnosticScan();
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            DebugLog(@"---- Rechecking after 5 seconds ----");
-            RunFullDiagnosticScan();
-        });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            DebugLog(@"---- Rechecking after 20 seconds ----");
-            RunFullDiagnosticScan();
-        });
     }
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
                                      NULL,
