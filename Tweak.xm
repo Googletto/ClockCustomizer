@@ -26,7 +26,7 @@ static NSString * const kPrefsPath = @"/var/jb/var/mobile/Library/Preferences/co
 static NSString * const kCustomFontsDirectory = @"/var/jb/var/mobile/Library/ClockCustomizer/Fonts";
 static NSString * const kDebugLogPath = @"/var/jb/var/mobile/Library/ClockCustomizer/debug.log";
 
-static BOOL gShowSeconds = NO;
+static BOOL gShowSeconds = YES; // always on — no longer a toggle
 static NSString *gFontName = nil;
 static BOOL gDebugLogging = NO;
 static NSString *gRegisteredCustomFontName = nil; // real PostScript name, auto-detected on registration
@@ -43,7 +43,6 @@ static void EnsureFontsDirectoryExists(void) {
 
 static void ReloadPrefs(void) {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
-    gShowSeconds = prefs[@"ShowSeconds"] ? [prefs[@"ShowSeconds"] boolValue] : NO;
     gFontName = prefs[@"FontName"];
     gDebugLogging = prefs[@"DebugLogging"] ? [prefs[@"DebugLogging"] boolValue] : NO;
 }
@@ -278,17 +277,21 @@ static void DumpIvarsOnce(Class cls) {
         if (timeTemplate && [timeTemplate containsString:@"a"]) {
             df.dateFormat = gShowSeconds ? @"h:mm:ss a" : @"h:mm a";
         }
-        [label setText:[df stringFromDate:[NSDate date]]];
+        NSString *str = [df stringFromDate:[NSDate date]];
+        DebugLog(@"Setting time text to: '%@' (len %lu)", str, (unsigned long)str.length);
+        [label setText:str];
     };
 
-    if (gShowSeconds) {
-        tick();
-        NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:1.0
-                                                           repeats:YES
-                                                             block:^(NSTimer * _Nonnull t) { tick(); }];
-        [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
-        objc_setAssociatedObject(self, @selector(didMoveToWindow), timer, OBJC_ASSOCIATION_RETAIN);
-    }
+    // Always run — not just when Show Seconds is on — so toggling the
+    // setting takes effect on the very next tick (within ~1s) instead of
+    // requiring the clock view to be recreated (which doesn't reliably
+    // happen on every lock/unlock).
+    tick();
+    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                       repeats:YES
+                                                         block:^(NSTimer * _Nonnull t) { tick(); }];
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+    objc_setAssociatedObject(self, @selector(didMoveToWindow), timer, OBJC_ASSOCIATION_RETAIN);
 }
 
 %end
