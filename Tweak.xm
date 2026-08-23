@@ -30,6 +30,7 @@ static BOOL gShowSeconds = YES; // always on — no longer a toggle
 static NSString *gFontName = nil;
 static BOOL gDebugLogging = NO;
 static NSString *gRegisteredCustomFontName = nil; // real PostScript name, auto-detected on registration
+static CGFloat gTimeSizeScale = 1.0;
 
 static void EnsureFontsDirectoryExists(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -45,6 +46,8 @@ static void ReloadPrefs(void) {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     gFontName = prefs[@"FontName"];
     gDebugLogging = prefs[@"DebugLogging"] ? [prefs[@"DebugLogging"] boolValue] : NO;
+    gTimeSizeScale = prefs[@"TimeSizeScale"] ? [prefs[@"TimeSizeScale"] floatValue] : 1.0;
+    if (gTimeSizeScale <= 0) gTimeSizeScale = 1.0;
 }
 
 static void DebugLog(NSString *fmt, ...) {
@@ -179,15 +182,15 @@ static void DumpIvarsOnce(Class cls) {
 %hook SBFLockScreenDateView
 
 + (UIFont *)timeFont {
-    return TimeFontAtSize(kDefaultTimeFontSize);
+    return TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale);
 }
 
 - (UIFont *)customTimeFont {
-    return TimeFontAtSize(kDefaultTimeFontSize);
+    return TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale);
 }
 
 - (void)setCustomTimeFont:(UIFont *)customTimeFont {
-    %orig(TimeFontAtSize(kDefaultTimeFontSize));
+    %orig(TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale));
 }
 
 %end
@@ -198,21 +201,19 @@ static void DumpIvarsOnce(Class cls) {
 
 - (CGRect)frame {
     CGRect orig = %orig;
-    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-    return CGRectMake(0, 5, screenWidth, orig.size.height);
+    return CGRectMake(orig.origin.x, 5, orig.size.width, orig.size.height);
 }
 
 - (void)setFrame:(CGRect)frame {
-    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-    %orig(CGRectMake(0, 5, screenWidth, frame.size.height));
+    %orig(CGRectMake(frame.origin.x, 5, frame.size.width, frame.size.height));
 }
 
 - (UIFont *)primaryFont {
-    return TimeFontAtSize(kDefaultTimeFontSize);
+    return TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale);
 }
 
 - (void)setPrimaryFont:(UIFont *)primaryFont {
-    %orig(TimeFontAtSize(kDefaultTimeFontSize));
+    %orig(TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale));
 }
 
 // Mirrors CSProminentSubtitleDateView's proven _textLabel technique below —
@@ -249,7 +250,8 @@ static void DumpIvarsOnce(Class cls) {
         UIFont *existingFont = [textLabel respondsToSelector:@selector(font)] ? [textLabel performSelector:@selector(font)] : nil;
         if ([existingFont isKindOfClass:[UIFont class]]) currentSize = existingFont.pointSize;
     } @catch (__unused NSException *e) {}
-    [textLabel setFont:TimeFontAtSize(currentSize)];
+    CGFloat targetSize = currentSize * gTimeSizeScale * (gShowSeconds ? 0.72 : 1.0);
+    [textLabel setFont:TimeFontAtSize(targetSize)];
 
     // Prevent the label from shrinking the font when "HH:mm:ss" is longer
     // than "HH:mm".
