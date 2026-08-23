@@ -245,13 +245,11 @@ static void DumpIvarsOnce(Class cls) {
     // Apply our font directly to the same object we already know works for
     // text, rather than relying on primaryFont/customTimeFont, which don't
     // seem to affect actual rendering on this build.
-    CGFloat currentSize = kDefaultTimeFontSize;
+    CGFloat baseSize = kDefaultTimeFontSize;
     @try {
         UIFont *existingFont = [textLabel respondsToSelector:@selector(font)] ? [textLabel performSelector:@selector(font)] : nil;
-        if ([existingFont isKindOfClass:[UIFont class]]) currentSize = existingFont.pointSize;
+        if ([existingFont isKindOfClass:[UIFont class]]) baseSize = existingFont.pointSize;
     } @catch (__unused NSException *e) {}
-    CGFloat targetSize = currentSize * gTimeSizeScale * (gShowSeconds ? 0.72 : 1.0);
-    [textLabel setFont:TimeFontAtSize(targetSize)];
 
     // Prevent the label from shrinking the font when "HH:mm:ss" is longer
     // than "HH:mm".
@@ -285,16 +283,36 @@ static void DumpIvarsOnce(Class cls) {
             df.dateFormat = gShowSeconds ? @"h:mm:ss a" : @"h:mm a";
         }
         NSString *str = [df stringFromDate:[NSDate date]];
-        DebugLog(@"Setting time text to: '%@' (len %lu)", str, (unsigned long)str.length);
+
+        // Measure the string against the label's actual current width and
+        // back off font size only as much as needed to make it fit — this
+        // adapts correctly across the whole Clock Size slider range instead
+        // of relying on one fixed guessed shrink factor.
+        CGFloat desiredSize = baseSize * gTimeSizeScale;
+        CGFloat availableWidth = [label respondsToSelector:@selector(bounds)] ? ((UIView *)label).bounds.size.width : 0;
+        UIFont *fitted = TimeFontAtSize(desiredSize);
+        if (availableWidth > 10) {
+            CGFloat size = desiredSize;
+            while (size > 20) {
+                CGSize measured = [str sizeWithAttributes:@{NSFontAttributeName: fitted}];
+                if (measured.width <= availableWidth) break;
+                size -= 2;
+                fitted = TimeFontAtSize(size);
+            }
+        }
+        [label setFont:fitted];
+
+        DebugLog(@"Setting time text to: '%@' (len %lu, font %.1fpt)", str, (unsigned long)str.length, fitted.pointSize);
         [label setText:str];
     };
 
     // Always run — not just when Show Seconds is on — so toggling the
-    // setting takes effect on the very next tick (within ~1s) instead of
-    // requiring the clock view to be recreated (which doesn't reliably
-    // happen on every lock/unlock).
+    // setting takes effect on the very next tick instead of requiring the
+    // clock view to be recreated (which doesn't reliably happen on every
+    // lock/unlock). Interval is short to minimize the flicker window when
+    // the system briefly reasserts its own text during the unlock animation.
     tick();
-    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.25
+    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.1
                                                        repeats:YES
                                                          block:^(NSTimer * _Nonnull t) { tick(); }];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
