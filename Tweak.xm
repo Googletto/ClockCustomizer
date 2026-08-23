@@ -133,26 +133,6 @@ static UIFont *TimeFontAtSize(CGFloat size) {
     return [UIFont systemFontOfSize:size weight:UIFontWeightThin];
 }
 
-static void DumpClassMethodsIfExists(NSString *className) {
-    Class cls = NSClassFromString(className);
-    if (!cls) {
-        DebugLog(@"Class %@ not found.", className);
-        return;
-    }
-    unsigned int count = 0;
-    Method *methods = class_copyMethodList(cls, &count);
-    NSMutableArray *names = [NSMutableArray array];
-    for (unsigned int i = 0; i < count; i++) {
-        [names addObject:NSStringFromSelector(method_getName(methods[i]))];
-    }
-    free(methods);
-    [names sortUsingSelector:@selector(compare:)];
-    DebugLog(@"---- %lu methods on class %@ ----", (unsigned long)names.count, className);
-    for (NSString *n in names) {
-        DebugLog(@"  %@", n);
-    }
-    DebugLog(@"---- end ----");
-}
 
 static void DumpIvarsOnce(Class cls) {
     static NSMutableSet *dumped;
