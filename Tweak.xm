@@ -201,11 +201,13 @@ static void DumpIvarsOnce(Class cls) {
 
 - (CGRect)frame {
     CGRect orig = %orig;
-    return CGRectMake(orig.origin.x, 5, orig.size.width, orig.size.height);
+    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+    return CGRectMake(0, 5, screenWidth, orig.size.height);
 }
 
 - (void)setFrame:(CGRect)frame {
-    %orig(CGRectMake(frame.origin.x, 5, frame.size.width, frame.size.height));
+    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+    %orig(CGRectMake(0, 5, screenWidth, frame.size.height));
 }
 
 - (UIFont *)primaryFont {
@@ -284,7 +286,7 @@ static void DumpIvarsOnce(Class cls) {
         }
         NSString *str = [df stringFromDate:[NSDate date]];
 
-                // Measure the string against the label's PARENT width (stable —
+        // Measure the string against the label's PARENT width (stable —
         // the label itself resizes based on its own content, which was
         // causing a feedback loop / visible pulsing when measured against
         // itself) and back off font size only as much as needed to fit.
@@ -319,6 +321,16 @@ static void DumpIvarsOnce(Class cls) {
                                                          block:^(NSTimer * _Nonnull t) { tick(); }];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
     objc_setAssociatedObject(self, @selector(didMoveToWindow), timer, OBJC_ASSOCIATION_RETAIN);
+
+    // Extra rapid-fire corrections right after the view appears, to cover
+    // the unlock animation window — the system seems to briefly reassert
+    // its own text right around when that animation completes, faster than
+    // our steady 0.1s cadence alone can catch.
+    NSArray<NSNumber *> *burstDelays = @[@0.05, @0.1, @0.15, @0.2, @0.3, @0.4, @0.5, @0.7, @0.9, @1.2, @1.5];
+    for (NSNumber *delay in burstDelays) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                        dispatch_get_main_queue(), ^{ tick(); });
+    }
 }
 
 %end
