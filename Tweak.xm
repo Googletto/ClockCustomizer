@@ -40,6 +40,7 @@ static NSString *gFontName = nil;
 static BOOL gDebugLogging = NO;
 static NSString *gRegisteredCustomFontName = nil; // real PostScript name, auto-detected on registration
 static CGFloat gTimeSizeScale = 1.0;
+static CGFloat gTimeYOffset = 0.0;
 
 static void EnsureFontsDirectoryExists(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -57,6 +58,7 @@ static void ReloadPrefs(void) {
     gDebugLogging = prefs[@"DebugLogging"] ? [prefs[@"DebugLogging"] boolValue] : NO;
     gTimeSizeScale = prefs[@"TimeSizeScale"] ? [prefs[@"TimeSizeScale"] floatValue] : 1.0;
     if (gTimeSizeScale <= 0) gTimeSizeScale = 1.0;
+    gTimeYOffset = prefs[@"TimeYOffset"] ? [prefs[@"TimeYOffset"] floatValue] : 0.0;
 }
 
 static void DebugLog(NSString *fmt, ...) {
@@ -132,7 +134,6 @@ static UIFont *TimeFontAtSize(CGFloat size) {
     }
     return [UIFont systemFontOfSize:size weight:UIFontWeightThin];
 }
-
 
 static void DumpIvarsOnce(Class cls) {
     static NSMutableSet *dumped;
@@ -282,7 +283,7 @@ static char kOverlayTimerKey;
         ov.text = str;
         CGSize fitSize = [str sizeWithAttributes:@{NSFontAttributeName: fitted}];
         ov.bounds = CGRectMake(0, 0, ceil(fitSize.width) + 4, ceil(fitSize.height) + 4);
-        ov.center = CGPointMake(strongSelf.bounds.size.width / 2.0, strongSelf.bounds.size.height / 2.0);
+        ov.center = CGPointMake(strongSelf.bounds.size.width / 2.0, strongSelf.bounds.size.height / 2.0 + gTimeYOffset);
 
         // Re-hide the original label and keep our overlay on top every
         // tick, in case something re-shows or re-adds it.
