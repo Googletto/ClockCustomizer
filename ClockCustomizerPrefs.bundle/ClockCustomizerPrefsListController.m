@@ -40,6 +40,28 @@ static NSString * const kCustomFontsDirectory = @"/var/jb/var/mobile/Library/Clo
         [sizeSlider setProperty:@"com.yourname.clockcustomizer/reload" forKey:@"PostNotification"];
         [specifiers addObject:sizeSlider];
 
+        // --- Clock position slider ---
+        PSSpecifier *positionGroup = [PSSpecifier groupSpecifierWithName:@"Clock Position"];
+        [positionGroup setProperty:@"Slide left for higher up the screen, right for lower."
+                            forKey:@"footerText"];
+        [specifiers addObject:positionGroup];
+
+        PSSpecifier *positionSlider = [PSSpecifier
+            preferenceSpecifierNamed:@"Clock Position"
+            target:self
+            set:@selector(setPreferenceValue:specifier:)
+            get:@selector(readPreferenceValue:)
+            detail:nil
+            cell:PSSliderCell
+            edit:nil];
+        [positionSlider setProperty:@"TimeYOffset" forKey:@"key"];
+        [positionSlider setProperty:@"com.yourname.clockcustomizer" forKey:@"defaults"];
+        [positionSlider setProperty:@(0.0) forKey:@"default"];
+        [positionSlider setProperty:@(-100.0) forKey:@"min"];
+        [positionSlider setProperty:@(100.0) forKey:@"max"];
+        [positionSlider setProperty:@"com.yourname.clockcustomizer/reload" forKey:@"PostNotification"];
+        [specifiers addObject:positionSlider];
+
         // --- Group: Debug ---
         PSSpecifier *groupDebug = [PSSpecifier groupSpecifierWithName:@"Troubleshooting"];
         [groupDebug setProperty:@"Only needed if the clock isn't updating — see Tweak.xm comments for how to read the log."
