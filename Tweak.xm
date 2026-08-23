@@ -284,12 +284,14 @@ static void DumpIvarsOnce(Class cls) {
         }
         NSString *str = [df stringFromDate:[NSDate date]];
 
-        // Measure the string against the label's actual current width and
-        // back off font size only as much as needed to make it fit — this
-        // adapts correctly across the whole Clock Size slider range instead
-        // of relying on one fixed guessed shrink factor.
+                // Measure the string against the label's PARENT width (stable —
+        // the label itself resizes based on its own content, which was
+        // causing a feedback loop / visible pulsing when measured against
+        // itself) and back off font size only as much as needed to fit.
         CGFloat desiredSize = baseSize * gTimeSizeScale;
-        CGFloat availableWidth = [label respondsToSelector:@selector(bounds)] ? ((UIView *)label).bounds.size.width : 0;
+        UIView *referenceView = [label respondsToSelector:@selector(superview)] ? [(UIView *)label superview] : nil;
+        CGFloat availableWidth = referenceView ? referenceView.bounds.size.width
+                                                : [UIScreen mainScreen].bounds.size.width - 40;
         UIFont *fitted = TimeFontAtSize(desiredSize);
         if (availableWidth > 10) {
             CGFloat size = desiredSize;
