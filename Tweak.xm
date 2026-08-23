@@ -13,6 +13,15 @@
 // running alongside it — installing this while the original is also
 // installed means two tweaks fighting over the same private methods.
 // Uninstall the original before installing this one.
+//
+// NOTE ON APPROACH: earlier versions tried resizing Apple's own time label
+// directly, but its frame/width appears to change dynamically (e.g. based
+// on wallpaper), which made that approach unreliable — it worked briefly
+// after some triggers (like changing wallpaper) and broke again after a
+// lock/unlock. This version instead hides Apple's original label and draws
+// a completely separate overlay label on top, centered on this view but
+// never constrained by its (unstable) width — sidesteps the problem
+// entirely rather than fighting it.
 
 #import <UIKit/UIKit.h>
 #import <CoreText/CoreText.h>
@@ -196,19 +205,16 @@ static void DumpIvarsOnce(Class cls) {
 %end
 
 // --- Time text itself ---
+//
+// Rather than resizing Apple's own label (its frame/width appears to change
+// dynamically, e.g. with wallpaper, which made earlier attempts unreliable),
+// we hide it and draw a separate overlay label on top instead, centered on
+// this view but with no width restriction of its own.
+
+static char kOverlayLabelKey;
+static char kOverlayTimerKey;
 
 %hook CSProminentTimeView
-
-- (CGRect)frame {
-    CGRect orig = %orig;
-    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-    return CGRectMake(0, 5, screenWidth, orig.size.height);
-}
-
-- (void)setFrame:(CGRect)frame {
-    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-    %orig(CGRectMake(0, 5, screenWidth, frame.size.height));
-}
 
 - (UIFont *)primaryFont {
     return TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale);
@@ -218,66 +224,59 @@ static void DumpIvarsOnce(Class cls) {
     %orig(TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale));
 }
 
-// Mirrors CSProminentSubtitleDateView's proven _textLabel technique below —
-// CSProminentTimeView is a sibling subclass of the same base class, so it
-// likely has the same ivar. If Debug Logging is on and it's missing, we log
-// diagnostics instead of guessing further.
 - (void)didMoveToWindow {
     %orig;
     if (gDebugLogging) DumpIvarsOnce([self class]);
 
     if (self.window == nil) {
-        NSTimer *t = objc_getAssociatedObject(self, @selector(didMoveToWindow));
+        NSTimer *t = objc_getAssociatedObject(self, &kOverlayTimerKey);
         [t invalidate];
-        objc_setAssociatedObject(self, @selector(didMoveToWindow), nil, OBJC_ASSOCIATION_RETAIN);
+        objc_setAssociatedObject(self, &kOverlayTimerKey, nil, OBJC_ASSOCIATION_RETAIN);
         return;
     }
 
-    id textLabel = nil;
-    @try { textLabel = [self valueForKey:@"_textLabel"]; } @catch (__unused NSException *e) {}
-
-    BOOL usable = [textLabel respondsToSelector:@selector(setText:)];
-    if (!usable) {
-        DebugLog(@"CSProminentTimeView _textLabel not usable (class: %@)",
-                 textLabel ? NSStringFromClass([textLabel class]) : @"nil");
-        if (gDebugLogging) DumpClassMethodsIfExists(NSStringFromClass([self class]));
-        return;
+    id originalLabel = nil;
+    @try { originalLabel = [self valueForKey:@"_textLabel"]; } @catch (__unused NSException *e) {}
+    if ([originalLabel respondsToSelector:@selector(setAlpha:)]) {
+        [(UIView *)originalLabel setAlpha:0.0];
     }
 
-    // Apply our font directly to the same object we already know works for
-    // text, rather than relying on primaryFont/customTimeFont, which don't
-    // seem to affect actual rendering on this build.
+    self.clipsToBounds = NO;
+    if (self.superview) self.superview.clipsToBounds = NO;
+
+    UILabel *overlay = objc_getAssociatedObject(self, &kOverlayLabelKey);
+    if (!overlay) {
+        overlay = [[UILabel alloc] init];
+        overlay.textAlignment = NSTextAlignmentCenter;
+        overlay.numberOfLines = 1;
+        overlay.userInteractionEnabled = NO;
+        overlay.backgroundColor = [UIColor clearColor];
+        overlay.textColor = [UIColor whiteColor];
+        @try {
+            id origColor = [originalLabel respondsToSelector:@selector(textColor)] ? [originalLabel performSelector:@selector(textColor)] : nil;
+            if ([origColor isKindOfClass:[UIColor class]]) overlay.textColor = origColor;
+        } @catch (__unused NSException *e) {}
+        [self addSubview:overlay];
+        objc_setAssociatedObject(self, &kOverlayLabelKey, overlay, OBJC_ASSOCIATION_RETAIN);
+    }
+
     CGFloat baseSize = kDefaultTimeFontSize;
     @try {
-        UIFont *existingFont = [textLabel respondsToSelector:@selector(font)] ? [textLabel performSelector:@selector(font)] : nil;
+        UIFont *existingFont = [originalLabel respondsToSelector:@selector(font)] ? [originalLabel performSelector:@selector(font)] : nil;
         if ([existingFont isKindOfClass:[UIFont class]]) baseSize = existingFont.pointSize;
     } @catch (__unused NSException *e) {}
 
-    // Prevent the label from shrinking the font when "HH:mm:ss" is longer
-    // than "HH:mm".
-    if ([textLabel respondsToSelector:@selector(setAdjustsFontSizeToFitWidth:)]) {
-        [textLabel setAdjustsFontSizeToFitWidth:NO];
-    }
-    if ([textLabel respondsToSelector:@selector(setMinimumScaleFactor:)]) {
-        [textLabel setMinimumScaleFactor:1.0];
-    }
-    if ([textLabel respondsToSelector:@selector(setNumberOfLines:)]) {
-        [textLabel setNumberOfLines:1];
-    }
-    if ([textLabel respondsToSelector:@selector(setTextAlignment:)]) {
-        [textLabel setTextAlignment:NSTextAlignmentCenter];
-    }
-
-    __weak id weakLabel = textLabel;
     __weak __typeof(self) weakSelf = self;
+    __weak UILabel *weakOverlay = overlay;
 
-    NSTimer *existing = objc_getAssociatedObject(self, @selector(didMoveToWindow));
-    [existing invalidate];
+    NSTimer *existingTimer = objc_getAssociatedObject(self, &kOverlayTimerKey);
+    [existingTimer invalidate];
 
     void (^tick)(void) = ^{
-        id label = weakLabel;
         __typeof(self) strongSelf = weakSelf;
-        if (!label || !strongSelf) return;
+        UILabel *ov = weakOverlay;
+        if (!strongSelf || !ov) return;
+
         NSDateFormatter *df = [NSDateFormatter new];
         df.dateFormat = gShowSeconds ? @"HH:mm:ss" : @"HH:mm";
         NSString *timeTemplate = [NSDateFormatter dateFormatFromTemplate:@"j" options:0 locale:[NSLocale currentLocale]];
@@ -286,51 +285,44 @@ static void DumpIvarsOnce(Class cls) {
         }
         NSString *str = [df stringFromDate:[NSDate date]];
 
-        // Measure the string against the label's PARENT width (stable —
-        // the label itself resizes based on its own content, which was
-        // causing a feedback loop / visible pulsing when measured against
-        // itself) and back off font size only as much as needed to fit.
+        // Cap at the screen width (with a small margin) so it can never
+        // overflow off-screen even at the largest Clock Size setting.
         CGFloat desiredSize = baseSize * gTimeSizeScale;
-        UIView *referenceView = [label respondsToSelector:@selector(superview)] ? [(UIView *)label superview] : nil;
-        CGFloat availableWidth = referenceView ? referenceView.bounds.size.width
-                                                : [UIScreen mainScreen].bounds.size.width - 40;
+        CGFloat maxWidth = [UIScreen mainScreen].bounds.size.width - 20;
         UIFont *fitted = TimeFontAtSize(desiredSize);
-        if (availableWidth > 10) {
-            CGFloat size = desiredSize;
-            while (size > 20) {
-                CGSize measured = [str sizeWithAttributes:@{NSFontAttributeName: fitted}];
-                if (measured.width <= availableWidth) break;
-                size -= 2;
-                fitted = TimeFontAtSize(size);
-            }
+        CGFloat size = desiredSize;
+        while (size > 20) {
+            CGSize measured = [str sizeWithAttributes:@{NSFontAttributeName: fitted}];
+            if (measured.width <= maxWidth) break;
+            size -= 2;
+            fitted = TimeFontAtSize(size);
         }
-        [label setFont:fitted];
 
-        DebugLog(@"Setting time text to: '%@' (len %lu, font %.1fpt)", str, (unsigned long)str.length, fitted.pointSize);
-        [label setText:str];
+        ov.font = fitted;
+        ov.text = str;
+        CGSize fitSize = [str sizeWithAttributes:@{NSFontAttributeName: fitted}];
+        ov.bounds = CGRectMake(0, 0, ceil(fitSize.width) + 4, ceil(fitSize.height) + 4);
+        ov.center = CGPointMake(strongSelf.bounds.size.width / 2.0, strongSelf.bounds.size.height / 2.0);
+
+        // Re-hide the original label and keep our overlay on top every
+        // tick, in case something re-shows or re-adds it.
+        id label = nil;
+        @try { label = [strongSelf valueForKey:@"_textLabel"]; } @catch (__unused NSException *e) {}
+        if ([label respondsToSelector:@selector(setAlpha:)]) [(UIView *)label setAlpha:0.0];
+        [strongSelf bringSubviewToFront:ov];
+
+        DebugLog(@"Overlay set to: '%@' (font %.1fpt)", str, fitted.pointSize);
     };
 
     // Always run — not just when Show Seconds is on — so toggling the
     // setting takes effect on the very next tick instead of requiring the
-    // clock view to be recreated (which doesn't reliably happen on every
-    // lock/unlock). Interval is short to minimize the flicker window when
-    // the system briefly reasserts its own text during the unlock animation.
+    // clock view to be recreated.
     tick();
     NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.1
                                                        repeats:YES
                                                          block:^(NSTimer * _Nonnull t) { tick(); }];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
-    objc_setAssociatedObject(self, @selector(didMoveToWindow), timer, OBJC_ASSOCIATION_RETAIN);
-
-    // Extra rapid-fire corrections right after the view appears, to cover
-    // the unlock animation window — the system seems to briefly reassert
-    // its own text right around when that animation completes, faster than
-    // our steady 0.1s cadence alone can catch.
-    NSArray<NSNumber *> *burstDelays = @[@0.05, @0.1, @0.15, @0.2, @0.3, @0.4, @0.5, @0.7, @0.9, @1.2, @1.5];
-    for (NSNumber *delay in burstDelays) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
-                        dispatch_get_main_queue(), ^{ tick(); });
-    }
+    objc_setAssociatedObject(self, &kOverlayTimerKey, timer, OBJC_ASSOCIATION_RETAIN);
 }
 
 %end
