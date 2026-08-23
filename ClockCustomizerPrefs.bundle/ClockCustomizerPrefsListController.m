@@ -20,6 +20,26 @@ static NSString * const kCustomFontsDirectory = @"/var/jb/var/mobile/Library/Clo
                         forKey:@"footerText"];
         [specifiers addObject:groupTop];
 
+        // --- Clock size slider ---
+        PSSpecifier *sizeGroup = [PSSpecifier groupSpecifierWithName:@"Clock Size"];
+        [specifiers addObject:sizeGroup];
+
+        PSSpecifier *sizeSlider = [PSSpecifier
+            preferenceSpecifierNamed:@"Clock Size"
+            target:self
+            set:@selector(setPreferenceValue:specifier:)
+            get:@selector(readPreferenceValue:)
+            detail:nil
+            cell:PSSliderCell
+            edit:nil];
+        [sizeSlider setProperty:@"TimeSizeScale" forKey:@"key"];
+        [sizeSlider setProperty:@"com.yourname.clockcustomizer" forKey:@"defaults"];
+        [sizeSlider setProperty:@(1.0) forKey:@"default"];
+        [sizeSlider setProperty:@(0.5) forKey:@"min"];
+        [sizeSlider setProperty:@(1.8) forKey:@"max"];
+        [sizeSlider setProperty:@"com.yourname.clockcustomizer/reload" forKey:@"PostNotification"];
+        [specifiers addObject:sizeSlider];
+
         // --- Group: Debug ---
         PSSpecifier *groupDebug = [PSSpecifier groupSpecifierWithName:@"Troubleshooting"];
         [groupDebug setProperty:@"Only needed if the clock isn't updating — see Tweak.xm comments for how to read the log."
