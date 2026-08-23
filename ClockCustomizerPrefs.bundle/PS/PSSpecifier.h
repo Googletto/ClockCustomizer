@@ -8,23 +8,21 @@
 #import <UIKit/UIKit.h>
 
 typedef NS_ENUM(NSInteger, PSCellType) {
-    PSGroupCell            = 0,
-    PSLinkCell             = 1,
-    PSLinkListCell         = 2,
-    PSListItemCell         = 3,
-    PSListItemsCell        = 4,
-    PSStaticTextCell       = 5,
-    PSTitleValueCell       = 6,
-    PSSliderCell           = 7,
-    PSSwitchCell           = 8,
-    PSSegmentCell          = 9,
-    PSEditTextCell         = 10,
-    PSSecureEditTextCell   = 11,
-    PSSelectionCell        = 12,
-    PSSelectionListCell    = 13,
-    PSSelectionCheckCell   = 14,
-    PSTitleValueButtonCell = 15,
-    PSButtonCell           = 16,
+    PSGroupCell           = 0,
+    PSLinkCell            = 1,
+    PSLinkListCell        = 2,
+    PSListItemCell        = 3,
+    PSTitleValueCell      = 4,
+    PSSliderCell          = 5,
+    PSSwitchCell          = 6,
+    PSStaticTextCell      = 7,
+    PSEditTextCell        = 8,
+    PSSegmentCell         = 9,
+    PSGiantIconCell       = 10,
+    PSGiantCell           = 11,
+    PSSecureEditTextCell  = 12,
+    PSButtonCell          = 13,
+    PSEditTextViewCell    = 14,
 };
 
 @interface PSSpecifier : NSObject
