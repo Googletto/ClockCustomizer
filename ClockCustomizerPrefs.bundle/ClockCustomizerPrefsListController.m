@@ -6,6 +6,26 @@ static NSString * const kCustomFontsDirectory = @"/var/jb/var/mobile/Library/Clo
 
 @implementation ClockCustomizerPrefsListController
 
+- (PSSpecifier *)sliderNamed:(NSString *)name key:(NSString *)key
+                     minimum:(double)minimum maximum:(double)maximum
+                     default:(double)defaultValue {
+    PSSpecifier *slider = [PSSpecifier
+        preferenceSpecifierNamed:name
+        target:self
+        set:@selector(setPreferenceValue:specifier:)
+        get:@selector(readPreferenceValue:)
+        detail:nil
+        cell:PSSliderCell
+        edit:nil];
+    [slider setProperty:key forKey:@"key"];
+    [slider setProperty:@"com.yourname.clockcustomizer" forKey:@"defaults"];
+    [slider setProperty:@(defaultValue) forKey:@"default"];
+    [slider setProperty:@(minimum) forKey:@"min"];
+    [slider setProperty:@(maximum) forKey:@"max"];
+    [slider setProperty:@"com.yourname.clockcustomizer/reload" forKey:@"PostNotification"];
+    return slider;
+}
+
 - (NSArray *)specifiers {
     if (_specifiers == nil) {
         NSMutableArray *specifiers = [NSMutableArray array];
@@ -23,44 +43,26 @@ static NSString * const kCustomFontsDirectory = @"/var/jb/var/mobile/Library/Clo
         // --- Clock size slider ---
         PSSpecifier *sizeGroup = [PSSpecifier groupSpecifierWithName:@"Clock Size"];
         [specifiers addObject:sizeGroup];
-
-        PSSpecifier *sizeSlider = [PSSpecifier
-            preferenceSpecifierNamed:@"Clock Size"
-            target:self
-            set:@selector(setPreferenceValue:specifier:)
-            get:@selector(readPreferenceValue:)
-            detail:nil
-            cell:PSSliderCell
-            edit:nil];
-        [sizeSlider setProperty:@"TimeSizeScale" forKey:@"key"];
-        [sizeSlider setProperty:@"com.yourname.clockcustomizer" forKey:@"defaults"];
-        [sizeSlider setProperty:@(1.0) forKey:@"default"];
-        [sizeSlider setProperty:@(0.5) forKey:@"min"];
-        [sizeSlider setProperty:@(1.8) forKey:@"max"];
-        [sizeSlider setProperty:@"com.yourname.clockcustomizer/reload" forKey:@"PostNotification"];
-        [specifiers addObject:sizeSlider];
+        [specifiers addObject:[self sliderNamed:@"Clock Size" key:@"TimeSizeScale"
+                                         minimum:0.5 maximum:1.8 default:1.0]];
 
         // --- Clock position slider ---
         PSSpecifier *positionGroup = [PSSpecifier groupSpecifierWithName:@"Clock Position"];
         [positionGroup setProperty:@"Slide left for higher up the screen, right for lower."
                             forKey:@"footerText"];
         [specifiers addObject:positionGroup];
+        [specifiers addObject:[self sliderNamed:@"Clock Position" key:@"TimeYOffset"
+                                         minimum:-100.0 maximum:100.0 default:0.0]];
 
-        PSSpecifier *positionSlider = [PSSpecifier
-            preferenceSpecifierNamed:@"Clock Position"
-            target:self
-            set:@selector(setPreferenceValue:specifier:)
-            get:@selector(readPreferenceValue:)
-            detail:nil
-            cell:PSSliderCell
-            edit:nil];
-        [positionSlider setProperty:@"TimeYOffset" forKey:@"key"];
-        [positionSlider setProperty:@"com.yourname.clockcustomizer" forKey:@"defaults"];
-        [positionSlider setProperty:@(0.0) forKey:@"default"];
-        [positionSlider setProperty:@(-100.0) forKey:@"min"];
-        [positionSlider setProperty:@(100.0) forKey:@"max"];
-        [positionSlider setProperty:@"com.yourname.clockcustomizer/reload" forKey:@"PostNotification"];
-        [specifiers addObject:positionSlider];
+        // --- Date position sliders ---
+        PSSpecifier *dateGroup = [PSSpecifier groupSpecifierWithName:@"Date Position"];
+        [dateGroup setProperty:@"Applies on your next lock/unlock rather than live."
+                        forKey:@"footerText"];
+        [specifiers addObject:dateGroup];
+        [specifiers addObject:[self sliderNamed:@"Date Left / Right" key:@"DateXOffset"
+                                         minimum:-100.0 maximum:100.0 default:0.0]];
+        [specifiers addObject:[self sliderNamed:@"Date Up / Down" key:@"DateYOffset"
+                                         minimum:-100.0 maximum:100.0 default:0.0]];
 
         // --- Group: Debug ---
         PSSpecifier *groupDebug = [PSSpecifier groupSpecifierWithName:@"Troubleshooting"];
