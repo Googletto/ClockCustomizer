@@ -1,11 +1,12 @@
 Package: com.yourname.clockcustomizer
-Name: ClockCustomizer
+Name: Eliz
 Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: Change the lock screen clock font and toggle seconds display.
-Maintainer: Your Name
-Author: Your Name
+Description: Lock screen clock font, size, position & seconds. Built on NightwindDev/old-lockscreen. Built with Claude (Anthropic).
+Maintainer: Alprazo1am
+Author: Alprazo1am
 Section: Tweaks
 Depends: firmware (>= 17.0), mobilesubstrate, preferenceloader
 Conflicts:
-Homepage: https://example.com
+Icon: file:///Library/PreferenceBundles/ClockCustomizerPrefs.bundle/icon.png
+Homepage: https://github.com/NightwindDev/old-lockscreen
