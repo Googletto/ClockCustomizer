@@ -19,7 +19,7 @@
 // on wallpaper), which made that approach unreliable — it worked briefly
 // after some triggers (like changing wallpaper) and broke again after a
 // lock/unlock. This version instead hides Apple's original label and draws
-// a completely separate overlay label on top, centered on this view but
+// a completely separate overlay label on top, centered on the same view but
 // never constrained by its (unstable) width — sidesteps the problem
 // entirely rather than fighting it.
 
@@ -41,6 +41,8 @@ static BOOL gDebugLogging = NO;
 static NSString *gRegisteredCustomFontName = nil; // real PostScript name, auto-detected on registration
 static CGFloat gTimeSizeScale = 1.0;
 static CGFloat gTimeYOffset = 0.0;
+static CGFloat gDateXOffset = 0.0;
+static CGFloat gDateYOffset = 0.0;
 
 static void EnsureFontsDirectoryExists(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -59,6 +61,8 @@ static void ReloadPrefs(void) {
     gTimeSizeScale = prefs[@"TimeSizeScale"] ? [prefs[@"TimeSizeScale"] floatValue] : 1.0;
     if (gTimeSizeScale <= 0) gTimeSizeScale = 1.0;
     gTimeYOffset = prefs[@"TimeYOffset"] ? [prefs[@"TimeYOffset"] floatValue] : 0.0;
+    gDateXOffset = prefs[@"DateXOffset"] ? [prefs[@"DateXOffset"] floatValue] : 0.0;
+    gDateYOffset = prefs[@"DateYOffset"] ? [prefs[@"DateYOffset"] floatValue] : 0.0;
 }
 
 static void DebugLog(NSString *fmt, ...) {
@@ -101,8 +105,35 @@ static void RegisterCustomFonts(void) {
         CFErrorRef error = NULL;
         BOOL ok = CTFontManagerRegisterFontsForURL((__bridge CFURLRef)url, kCTFontManagerScopeProcess, &error);
         if (!ok || error) {
-            DebugLog(@"Failed to register custom font %@: %@", filename, error);
+            DebugLog(@"Failed to register custom font %@ via URL method: %@", filename, error);
             if (error) CFRelease(error);
+
+            // Fallback for a known CoreText bug on some iOS 17.0.x builds
+            // where CTFontManagerRegisterFontsForURL fails outright — try
+            // the older CGFont-based registration method instead.
+            NSData *fontData = [NSData dataWithContentsOfURL:url];
+            if (fontData) {
+                CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)fontData);
+                if (provider) {
+                    CGFontRef cgFont = CGFontCreateWithDataProvider(provider);
+                    if (cgFont) {
+                        CFErrorRef fallbackError = NULL;
+                        BOOL fallbackOK = CTFontManagerRegisterGraphicsFont(cgFont, &fallbackError);
+                        if (fallbackOK) {
+                            CFStringRef psName = CGFontCopyPostScriptName(cgFont);
+                            if (psName) {
+                                gRegisteredCustomFontName = (__bridge_transfer NSString *)psName;
+                                DebugLog(@"Registered %@ via fallback CGFont method as: %@", filename, gRegisteredCustomFontName);
+                            }
+                        } else {
+                            DebugLog(@"Fallback CGFont registration also failed for %@: %@", filename, fallbackError);
+                            if (fallbackError) CFRelease(fallbackError);
+                        }
+                        CGFontRelease(cgFont);
+                    }
+                    CGDataProviderRelease(provider);
+                }
+            }
             continue;
         }
 
@@ -325,6 +356,7 @@ static char kOverlayTimerKey;
     %orig;
     UILabel *textLabel = [self valueForKey:@"_textLabel"];
     [textLabel setFont:[UIFont systemFontOfSize:kDateFontSize weight:UIFontWeightRegular]];
+    textLabel.transform = CGAffineTransformMakeTranslation(gDateXOffset, gDateYOffset);
 }
 
 %end
