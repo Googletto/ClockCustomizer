@@ -10,10 +10,12 @@
 		<string>PSLinkCell</string>
 		<key>detail</key>
 		<string>ClockCustomizerPrefsListController</string>
+		<key>icon</key>
+		<string>icon</string>
 		<key>isController</key>
 		<true/>
 		<key>label</key>
-		<string>Clock Customizer</string>
+		<string>Eliz</string>
 	</dict>
 </dict>
 </plist>
