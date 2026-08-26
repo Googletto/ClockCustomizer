@@ -1,266 +1,426 @@
+// ClockCustomizer — Tweak.xm
+//
+// Target: iOS 17.0–17.3, rootless jailbreak (Dopamine 3 / ellekit)
+//
+// This is a fork/extension of NightwindDev/old-lockscreen
+// (https://github.com/NightwindDev/old-lockscreen, MIT licensed), which
+// restores the iOS 15-style lock screen clock layout on iOS 16/17. That
+// project's hooks are the proven, working baseline on this device — this
+// file keeps its layout/positioning fixes and adds a configurable font and
+// a "show seconds" feature on top.
+//
+// IMPORTANT: this REPLACES NightwindDev's original tweak rather than
+// running alongside it — installing this while the original is also
+// installed means two tweaks fighting over the same private methods.
+// Uninstall the original before installing this one.
+//
+// NOTE ON APPROACH: earlier versions tried resizing Apple's own time label
+// directly, but its frame/width appears to change dynamically (e.g. based
+// on wallpaper), which made that approach unreliable — it worked briefly
+// after some triggers (like changing wallpaper) and broke again after a
+// lock/unlock. This version instead hides Apple's original label and draws
+// a completely separate overlay label on top, centered on the same view but
+// never constrained by its (unstable) width — sidesteps the problem
+// entirely rather than fighting it.
+
 #import <UIKit/UIKit.h>
 #import <CoreText/CoreText.h>
-#import <Preferences/Preferences.h>
-#import <logos/logos.h>
+#import <objc/runtime.h>
 
-// ============================================
-// PREFERENCES HELPER
-// ============================================
-static NSDictionary *getPrefs() {
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/com.googletto.clockcustomizer.plist"];
-    if (!prefs) {
-        // Fallback default values
-        prefs = @{
-            @"fontName": @"Helvetica",
-            @"fontSize": @(80),
-            @"timeXOffset": @(0),
-            @"timeYOffset": @(0),
-            @"dateXOffset": @(0),
-            @"dateYOffset": @(20),
-            @"showSeconds": @(NO)
-        };
+#define kSubtitlePadding 102
+#define kDefaultTimeFontSize 80
+#define kDateFontSize 22
+
+static NSString * const kPrefsPath = @"/var/jb/var/mobile/Library/Preferences/com.yourname.clockcustomizer.plist";
+static NSString * const kCustomFontsDirectory = @"/var/jb/var/mobile/Library/ClockCustomizer/Fonts";
+static NSString * const kDebugLogPath = @"/var/jb/var/mobile/Library/ClockCustomizer/debug.log";
+
+static BOOL gShowSeconds = YES; // always on — no longer a toggle
+static NSString *gFontName = nil;
+static BOOL gDebugLogging = NO;
+static NSString *gRegisteredCustomFontName = nil; // real PostScript name, auto-detected on registration
+static CGFloat gTimeSizeScale = 1.0;
+static CGFloat gTimeYOffset = 0.0;
+static CGFloat gDateXOffset = 0.0;
+static CGFloat gDateYOffset = 0.0;
+
+static void EnsureFontsDirectoryExists(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:kCustomFontsDirectory]) {
+        [fm createDirectoryAtPath:kCustomFontsDirectory
+       withIntermediateDirectories:YES
+                        attributes:nil
+                             error:nil];
     }
-    return prefs;
 }
 
-// ============================================
-// BULLETPROOF FONT LOADER (NO REGISTRATION)
-// ============================================
-static UIFont *loadFontFromPath(NSString *fontPath, CGFloat size) {
-    // 1. Try direct file read
-    NSData *fontData = [NSData dataWithContentsOfFile:fontPath];
-    if (!fontData) {
-        NSLog(@"ClockCustomizer: Font file NOT FOUND at %@", fontPath);
-        return nil;
-    }
-    
-    // 2. Create CoreText font directly from data (bypasses sandbox)
-    CGDataProviderRef provider = CGDataProviderCreateWithCFData((CFDataRef)fontData);
-    CGFontRef cgFont = CGFontCreateWithDataProvider(provider);
-    if (!cgFont) {
-        CGDataProviderRelease(provider);
-        NSLog(@"ClockCustomizer: Failed to create CGFont");
-        return nil;
-    }
-    
-    CTFontRef ctFont = CTFontCreateWithGraphicsFont(cgFont, size, NULL, NULL);
-    CGFontRelease(cgFont);
-    CGDataProviderRelease(provider);
-    
-    // Bridge to UIFont (safe for attributed strings)
-    return (__bridge_transfer UIFont *)ctFont;
+static void ReloadPrefs(void) {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    gFontName = prefs[@"FontName"];
+    gDebugLogging = prefs[@"DebugLogging"] ? [prefs[@"DebugLogging"] boolValue] : NO;
+    gTimeSizeScale = prefs[@"TimeSizeScale"] ? [prefs[@"TimeSizeScale"] floatValue] : 1.0;
+    if (gTimeSizeScale <= 0) gTimeSizeScale = 1.0;
+    gTimeYOffset = prefs[@"TimeYOffset"] ? [prefs[@"TimeYOffset"] floatValue] : 0.0;
+    gDateXOffset = prefs[@"DateXOffset"] ? [prefs[@"DateXOffset"] floatValue] : 0.0;
+    gDateYOffset = prefs[@"DateYOffset"] ? [prefs[@"DateYOffset"] floatValue] : 0.0;
 }
 
-// ============================================
-// FILE SEARCHER (LOOKS IN MULTIPLE PATHS)
-// ============================================
-static NSString *findFontFile(NSString *fontName) {
-    // If it's a system font name (e.g., "Helvetica"), return nil – we'll use system font
-    NSArray *systemFonts = @[@"Helvetica", @"Arial", @"Times New Roman", @"Courier", @"Georgia", @"Verdana"];
-    if ([systemFonts containsObject:fontName]) {
-        return nil;
+static void DebugLog(NSString *fmt, ...) {
+    if (!gDebugLogging) return;
+    va_list args;
+    va_start(args, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
+    va_end(args);
+    NSLog(@"[ClockCustomizer] %@", msg);
+
+    NSString *line = [NSString stringWithFormat:@"%@  %@\n", [NSDate date], msg];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [kDebugLogPath stringByDeletingLastPathComponent];
+    if (![fm fileExistsAtPath:dir]) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     }
-    
-    // If the user entered a full path, use it directly
-    if ([fontName hasPrefix:@"/"]) {
-        if ([[NSFileManager defaultManager] fileExistsAtPath:fontName]) {
-            return fontName;
-        }
-        return nil;
+    if (![fm fileExistsAtPath:kDebugLogPath]) {
+        [fm createFileAtPath:kDebugLogPath contents:nil attributes:nil];
     }
-    
-    // Search in common rootless paths
-    NSArray *searchPaths = @[
-        @"/var/jb/Library/Fonts/ClockCustomizer/",
-        @"/var/mobile/Library/ClockCustomizer/Fonts/",
-        @"/var/jb/Library/Fonts/"
-    ];
-    
-    for (NSString *basePath in searchPaths) {
-        NSString *fullPath = [basePath stringByAppendingPathComponent:fontName];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:fullPath]) {
-            NSLog(@"ClockCustomizer: Found font at %@", fullPath);
-            return fullPath;
-        }
-    }
-    
-    // Try appending .ttf or .otf if the user didn't specify
-    for (NSString *basePath in searchPaths) {
-        NSString *pathWithExt = [basePath stringByAppendingPathComponent:[fontName stringByAppendingString:@".ttf"]];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:pathWithExt]) {
-            NSLog(@"ClockCustomizer: Found font (with .ttf) at %@", pathWithExt);
-            return pathWithExt;
-        }
-        pathWithExt = [basePath stringByAppendingPathComponent:[fontName stringByAppendingString:@".otf"]];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:pathWithExt]) {
-            NSLog(@"ClockCustomizer: Found font (with .otf) at %@", pathWithExt);
-            return pathWithExt;
-        }
-    }
-    
-    return nil;
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:kDebugLogPath];
+    [fh seekToEndOfFile];
+    [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+    [fh closeFile];
 }
 
-// ============================================
-// OVERLAY VIEW – DRAWS CUSTOM CLOCK + DATE
-// ============================================
-@interface ClockCustomizerOverlay : UIView
-@property (nonatomic, strong) UILabel *timeLabel;
-@property (nonatomic, strong) UILabel *dateLabel;
-@property (nonatomic, strong) NSDictionary *prefs;
-- (void)updateTime;
-@end
+static void RegisterCustomFonts(void) {
+    EnsureFontsDirectoryExists();
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *contents = [fm contentsOfDirectoryAtPath:kCustomFontsDirectory error:nil];
+    NSSet *validExtensions = [NSSet setWithObjects:@"ttf", @"otf", @"ttc", nil];
 
-@implementation ClockCustomizerOverlay
+    for (NSString *filename in contents) {
+        if (![validExtensions containsObject:filename.pathExtension.lowercaseString]) continue;
+        NSString *fullPath = [kCustomFontsDirectory stringByAppendingPathComponent:filename];
+        NSURL *url = [NSURL fileURLWithPath:fullPath];
 
-- (instancetype)initWithFrame:(CGRect)frame prefs:(NSDictionary *)prefs {
-    self = [super initWithFrame:frame];
-    if (self) {
-        self.prefs = prefs;
-        self.backgroundColor = [UIColor clearColor];
-        self.userInteractionEnabled = NO;
-        
-        // Time label
-        self.timeLabel = [[UILabel alloc] init];
-        self.timeLabel.textAlignment = NSTextAlignmentCenter;
-        self.timeLabel.backgroundColor = [UIColor clearColor];
-        [self addSubview:self.timeLabel];
-        
-        // Date label
-        self.dateLabel = [[UILabel alloc] init];
-        self.dateLabel.textAlignment = NSTextAlignmentCenter;
-        self.dateLabel.backgroundColor = [UIColor clearColor];
-        self.dateLabel.font = [UIFont systemFontOfSize:16];
-        self.dateLabel.textColor = [UIColor whiteColor];
-        [self addSubview:self.dateLabel];
-        
-        // Start timer for seconds if enabled
-        if ([prefs[@"showSeconds"] boolValue]) {
-            [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateTime) userInfo:nil repeats:YES];
-        }
-        
-        [self updateTime];
-    }
-    return self;
-}
+        NSDictionary *attrs = [fm attributesOfItemAtPath:fullPath error:nil];
+        DebugLog(@"Font file %@ is %@ bytes", filename, attrs[NSFileSize]);
 
-- (void)updateTime {
-    NSDateFormatter *timeFormatter = [[NSDateFormatter alloc] init];
-    [timeFormatter setDateFormat:@"hh:mm"]; // Base time
-    
-    if ([self.prefs[@"showSeconds"] boolValue]) {
-        [timeFormatter setDateFormat:@"hh:mm:ss"];
-    }
-    
-    NSString *timeString = [timeFormatter stringFromDate:[NSDate date]];
-    NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
-    [dateFormatter setDateFormat:@"EEEE, MMM d"];
-    NSString *dateString = [dateFormatter stringFromDate:[NSDate date]];
-    
-    // ---- LOAD FONT ----
-    UIFont *timeFont = nil;
-    NSString *fontName = self.prefs[@"fontName"];
-    CGFloat fontSize = [self.prefs[@"fontSize"] floatValue] ?: 80.0;
-    
-    if (fontName && fontName.length > 0) {
-        NSString *fontPath = findFontFile(fontName);
-        if (fontPath) {
-            timeFont = loadFontFromPath(fontPath, fontSize);
-            if (timeFont) {
-                NSLog(@"ClockCustomizer: Successfully loaded custom font from %@", fontPath);
-            } else {
-                NSLog(@"ClockCustomizer: Failed to load font from path, falling back to system");
+        CFErrorRef error = NULL;
+        BOOL ok = CTFontManagerRegisterFontsForURL((__bridge CFURLRef)url, kCTFontManagerScopeProcess, &error);
+        if (!ok || error) {
+            DebugLog(@"Failed to register custom font %@ via URL method: %@", filename, error);
+            if (error) CFRelease(error);
+
+            // Fallback for a known CoreText bug on some iOS 17.0.x builds
+            // where CTFontManagerRegisterFontsForURL fails outright — try
+            // the older CGFont-based registration method instead.
+            NSData *fontData = [NSData dataWithContentsOfURL:url];
+            if (fontData) {
+                CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)fontData);
+                if (provider) {
+                    CGFontRef cgFont = CGFontCreateWithDataProvider(provider);
+                    if (cgFont) {
+                        CFErrorRef fallbackError = NULL;
+                        BOOL fallbackOK = CTFontManagerRegisterGraphicsFont(cgFont, &fallbackError);
+                        if (fallbackOK) {
+                            CFStringRef psName = CGFontCopyPostScriptName(cgFont);
+                            if (psName) {
+                                gRegisteredCustomFontName = (__bridge_transfer NSString *)psName;
+                                DebugLog(@"Registered %@ via fallback CGFont method as: %@", filename, gRegisteredCustomFontName);
+                            }
+                        } else {
+                            DebugLog(@"Fallback CGFont registration also failed for %@: %@", filename, fallbackError);
+                            if (fallbackError) CFRelease(fallbackError);
+                        }
+                        CGFontRelease(cgFont);
+                    }
+                    CGDataProviderRelease(provider);
+                }
             }
-        } else {
-            // Check if it's a system font name (e.g., "Helvetica-Bold")
-            timeFont = [UIFont fontWithName:fontName size:fontSize];
-            if (timeFont) {
-                NSLog(@"ClockCustomizer: Using system font: %@", fontName);
-            } else {
-                NSLog(@"ClockCustomizer: Font '%@' not found as system font, using default", fontName);
+            continue;
+        }
+
+        // Look up the real PostScript name so we can pass it to
+        // +[UIFont fontWithName:] later — it may not match the filename.
+        CFArrayRef descriptors = CTFontManagerCreateFontDescriptorsFromURL((__bridge CFURLRef)url);
+        if (descriptors && CFArrayGetCount(descriptors) > 0) {
+            CTFontDescriptorRef desc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descriptors, 0);
+            CFStringRef psNameRef = (CFStringRef)CTFontDescriptorCopyAttribute(desc, kCTFontNameAttribute);
+            if (psNameRef) {
+                gRegisteredCustomFontName = (__bridge_transfer NSString *)psNameRef;
+                DebugLog(@"Registered %@ as font name: %@", filename, gRegisteredCustomFontName);
             }
         }
+        if (descriptors) CFRelease(descriptors);
     }
-    
-    // Fallback to system font if custom failed
-    if (!timeFont) {
-        timeFont = [UIFont systemFontOfSize:fontSize weight:UIFontWeightThin];
-    }
-    
-    // Apply attributed string (so font applies perfectly)
-    NSDictionary *attributes = @{
-        NSFontAttributeName: timeFont,
-        NSForegroundColorAttributeName: [UIColor whiteColor],
-        NSKernAttributeName: @(1.0) // slight letter spacing
-    };
-    
-    NSAttributedString *attrString = [[NSAttributedString alloc] initWithString:timeString attributes:attributes];
-    self.timeLabel.attributedText = attrString;
-    
-    // Date label
-    self.dateLabel.text = dateString;
-    
-    // Layout (position based on prefs)
-    CGFloat timeX = [self.prefs[@"timeXOffset"] floatValue];
-    CGFloat timeY = [self.prefs[@"timeYOffset"] floatValue];
-    CGFloat dateX = [self.prefs[@"dateXOffset"] floatValue];
-    CGFloat dateY = [self.prefs[@"dateYOffset"] floatValue];
-    
-    // Size the labels
-    [self.timeLabel sizeToFit];
-    [self.dateLabel sizeToFit];
-    
-    // Center them relative to self, with offsets
-    CGSize timeSize = self.timeLabel.frame.size;
-    CGSize dateSize = self.dateLabel.frame.size;
-    
-    self.timeLabel.frame = CGRectMake(
-        (self.bounds.size.width - timeSize.width) / 2 + timeX,
-        (self.bounds.size.height - timeSize.height - dateSize.height - 10) / 2 + timeY,
-        timeSize.width,
-        timeSize.height
-    );
-    
-    self.dateLabel.frame = CGRectMake(
-        (self.bounds.size.width - dateSize.width) / 2 + dateX,
-        CGRectGetMaxY(self.timeLabel.frame) + 10 + dateY,
-        dateSize.width,
-        dateSize.height
-    );
 }
 
+// Our chosen font at the given size if one is set, otherwise the classic
+// thin system font old-lockscreen used by default.
+static UIFont *TimeFontAtSize(CGFloat size) {
+    if (gRegisteredCustomFontName.length > 0) {
+        UIFont *custom = [UIFont fontWithName:gRegisteredCustomFontName size:size];
+        if (custom) return custom;
+    }
+    if (gFontName.length > 0) {
+        UIFont *custom = [UIFont fontWithName:gFontName size:size];
+        if (custom) return custom;
+    }
+    return [UIFont systemFontOfSize:size weight:UIFontWeightThin];
+}
+
+static void DumpIvarsOnce(Class cls) {
+    static NSMutableSet *dumped;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ dumped = [NSMutableSet new]; });
+    NSString *clsName = NSStringFromClass(cls);
+    if ([dumped containsObject:clsName]) return;
+    [dumped addObject:clsName];
+
+    unsigned int count = 0;
+    Ivar *ivars = class_copyIvarList(cls, &count);
+    DebugLog(@"---- Ivars for %@ ----", clsName);
+    for (unsigned int i = 0; i < count; i++) {
+        const char *name = ivar_getName(ivars[i]);
+        const char *type = ivar_getTypeEncoding(ivars[i]);
+        DebugLog(@"  %s  (%s)", name, type);
+    }
+    free(ivars);
+}
+
+// --- Interfaces for the private classes involved (from old-lockscreen) ---
+
+@interface CSProminentSubtitleDateView : UIView
+@end
+@interface CSProminentEmptyElementView : UIView
+@end
+@interface CSProminentTextElementView : UIView
+@end
+@interface CSProminentTimeView : CSProminentTextElementView
+@end
+@interface SBFLockScreenDateView : UIView
 @end
 
-// ============================================
-// THE HOOK – INJECT OVERLAY INTO LOCK SCREEN
-// ============================================
+// --- Clock font (the class that owns the big time display) ---
+
 %hook SBFLockScreenDateView
 
-- (instancetype)initWithFrame:(CGRect)frame {
-    self = %orig;
-    if (self) {
-        // Hide the original time and date labels
-        // iOS 17 uses _timeLabel and _dateLabel (or similar)
-        [self setValue:@(NO) forKey:@"showsTime"]; // Try to hide via property
-        [[self valueForKey:@"_timeLabel"] setHidden:YES];
-        [[self valueForKey:@"_dateLabel"] setHidden:YES];
-        
-        // Add our custom overlay
-        NSDictionary *prefs = getPrefs();
-        ClockCustomizerOverlay *overlay = [[ClockCustomizerOverlay alloc] initWithFrame:self.bounds prefs:prefs];
-        overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [self addSubview:overlay];
-        
-        NSLog(@"ClockCustomizer: Overlay injected successfully!");
-    }
-    return self;
++ (UIFont *)timeFont {
+    return TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale);
+}
+
+- (UIFont *)customTimeFont {
+    return TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale);
+}
+
+- (void)setCustomTimeFont:(UIFont *)customTimeFont {
+    %orig(TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale));
 }
 
 %end
 
-// ============================================
-// CONSTRUCTOR
-// ============================================
+// --- Time text itself ---
+//
+// Rather than resizing Apple's own label (its frame/width appears to change
+// dynamically, e.g. with wallpaper, which made earlier attempts unreliable),
+// we hide it and draw a separate overlay label on top instead, centered on
+// this view but with no width restriction of its own.
+
+static char kOverlayLabelKey;
+static char kOverlayTimerKey;
+
+%hook CSProminentTimeView
+
+- (UIFont *)primaryFont {
+    return TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale);
+}
+
+- (void)setPrimaryFont:(UIFont *)primaryFont {
+    %orig(TimeFontAtSize(kDefaultTimeFontSize * gTimeSizeScale));
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (gDebugLogging) DumpIvarsOnce([self class]);
+
+    if (self.window == nil) {
+        NSTimer *t = objc_getAssociatedObject(self, &kOverlayTimerKey);
+        [t invalidate];
+        objc_setAssociatedObject(self, &kOverlayTimerKey, nil, OBJC_ASSOCIATION_RETAIN);
+        return;
+    }
+
+    id originalLabel = nil;
+    @try { originalLabel = [self valueForKey:@"_textLabel"]; } @catch (__unused NSException *e) {}
+    if ([originalLabel respondsToSelector:@selector(setAlpha:)]) {
+        [(UIView *)originalLabel setAlpha:0.0];
+    }
+
+    self.clipsToBounds = NO;
+    if (self.superview) self.superview.clipsToBounds = NO;
+
+    UILabel *overlay = objc_getAssociatedObject(self, &kOverlayLabelKey);
+    if (!overlay) {
+        overlay = [[UILabel alloc] init];
+        overlay.textAlignment = NSTextAlignmentCenter;
+        overlay.numberOfLines = 1;
+        overlay.userInteractionEnabled = NO;
+        overlay.backgroundColor = [UIColor clearColor];
+        overlay.textColor = [UIColor whiteColor];
+        @try {
+            id origColor = [originalLabel respondsToSelector:@selector(textColor)] ? [originalLabel performSelector:@selector(textColor)] : nil;
+            if ([origColor isKindOfClass:[UIColor class]]) overlay.textColor = origColor;
+        } @catch (__unused NSException *e) {}
+        [self addSubview:overlay];
+        objc_setAssociatedObject(self, &kOverlayLabelKey, overlay, OBJC_ASSOCIATION_RETAIN);
+    }
+
+    CGFloat baseSize = kDefaultTimeFontSize;
+    @try {
+        UIFont *existingFont = [originalLabel respondsToSelector:@selector(font)] ? [originalLabel performSelector:@selector(font)] : nil;
+        if ([existingFont isKindOfClass:[UIFont class]]) baseSize = existingFont.pointSize;
+    } @catch (__unused NSException *e) {}
+
+    __weak __typeof(self) weakSelf = self;
+    __weak UILabel *weakOverlay = overlay;
+
+    NSTimer *existingTimer = objc_getAssociatedObject(self, &kOverlayTimerKey);
+    [existingTimer invalidate];
+
+    void (^tick)(void) = ^{
+        __typeof(self) strongSelf = weakSelf;
+        UILabel *ov = weakOverlay;
+        if (!strongSelf || !ov) return;
+
+        NSDateFormatter *df = [NSDateFormatter new];
+        df.dateFormat = gShowSeconds ? @"HH:mm:ss" : @"HH:mm";
+        NSString *timeTemplate = [NSDateFormatter dateFormatFromTemplate:@"j" options:0 locale:[NSLocale currentLocale]];
+        if (timeTemplate && [timeTemplate containsString:@"a"]) {
+            df.dateFormat = gShowSeconds ? @"h:mm:ss a" : @"h:mm a";
+        }
+        NSString *str = [df stringFromDate:[NSDate date]];
+
+        // Cap at the screen width (with a small margin) so it can never
+        // overflow off-screen even at the largest Clock Size setting.
+        CGFloat desiredSize = baseSize * gTimeSizeScale;
+        CGFloat maxWidth = [UIScreen mainScreen].bounds.size.width - 20;
+        UIFont *fitted = TimeFontAtSize(desiredSize);
+        CGFloat size = desiredSize;
+        while (size > 20) {
+            CGSize measured = [str sizeWithAttributes:@{NSFontAttributeName: fitted}];
+            if (measured.width <= maxWidth) break;
+            size -= 2;
+            fitted = TimeFontAtSize(size);
+        }
+
+        ov.font = fitted;
+        ov.text = str;
+        CGSize fitSize = [str sizeWithAttributes:@{NSFontAttributeName: fitted}];
+        ov.bounds = CGRectMake(0, 0, ceil(fitSize.width) + 4, ceil(fitSize.height) + 4);
+        ov.center = CGPointMake(strongSelf.bounds.size.width / 2.0, strongSelf.bounds.size.height / 2.0 + gTimeYOffset);
+
+        // Re-hide the original label and keep our overlay on top every
+        // tick, in case something re-shows or re-adds it.
+        id label = nil;
+        @try { label = [strongSelf valueForKey:@"_textLabel"]; } @catch (__unused NSException *e) {}
+        if ([label respondsToSelector:@selector(setAlpha:)]) [(UIView *)label setAlpha:0.0];
+        [strongSelf bringSubviewToFront:ov];
+
+        DebugLog(@"Overlay set to: '%@' (font %.1fpt)", str, fitted.pointSize);
+    };
+
+    // Always run — not just when Show Seconds is on — so toggling the
+    // setting takes effect on the very next tick instead of requiring the
+    // clock view to be recreated.
+    tick();
+    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.1
+                                                       repeats:YES
+                                                         block:^(NSTimer * _Nonnull t) { tick(); }];
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+    objc_setAssociatedObject(self, &kOverlayTimerKey, timer, OBJC_ASSOCIATION_RETAIN);
+}
+
+%end
+
+// --- Date subtitle (e.g. "Tuesday, August 22") ---
+
+%hook CSProminentSubtitleDateView
+
+- (CGRect)frame {
+    CGRect orig = %orig;
+    return CGRectMake(orig.origin.x, kSubtitlePadding, orig.size.width, orig.size.height);
+}
+
+- (void)setFrame:(CGRect)frame {
+    %orig(CGRectMake(frame.origin.x, kSubtitlePadding, frame.size.width, frame.size.height));
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    UILabel *textLabel = [self valueForKey:@"_textLabel"];
+    [textLabel setFont:[UIFont systemFontOfSize:kDateFontSize weight:UIFontWeightRegular]];
+
+    void (^applyOffset)(void) = ^{
+        textLabel.transform = CGAffineTransformMakeTranslation(gDateXOffset, gDateYOffset);
+    };
+    applyOffset();
+    // Re-apply a few times shortly after — the lock screen's own entrance
+    // animation may reset transform right after we set it once.
+    NSArray<NSNumber *> *delays = @[@0.05, @0.15, @0.3, @0.5, @0.8, @1.2];
+    for (NSNumber *delay in delays) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                        dispatch_get_main_queue(), applyOffset);
+    }
+}
+
+%end
+
+// --- Miscellaneous elements around the clock (battery charging text, etc.) ---
+
+%hook CSProminentEmptyElementView
+
+- (CGRect)frame {
+    CGRect orig = %orig;
+    return CGRectMake(orig.origin.x, kSubtitlePadding, orig.size.width, orig.size.height);
+}
+
+- (void)setFrame:(CGRect)frame {
+    %orig(CGRectMake(frame.origin.x, kSubtitlePadding, frame.size.width, frame.size.height));
+}
+
+%end
+
+%hook CSProminentTextElementView
+
+- (CGRect)frame {
+    if (![self isKindOfClass:%c(CSProminentTimeView)]) {
+        CGRect orig = %orig;
+        return CGRectMake(orig.origin.x, kSubtitlePadding, orig.size.width, orig.size.height);
+    }
+    return %orig;
+}
+
+- (void)setFrame:(CGRect)frame {
+    if (![self isKindOfClass:%c(CSProminentTimeView)]) {
+        %orig(CGRectMake(frame.origin.x, kSubtitlePadding, frame.size.width, frame.size.height));
+    } else {
+        %orig;
+    }
+}
+
+%end
+
+static void ReloadPrefsAndFonts(void) {
+    ReloadPrefs();
+    RegisterCustomFonts();
+}
+
 %ctor {
-    NSLog(@"ClockCustomizer: Tweak loaded!");
+    ReloadPrefsAndFonts();
+    if (gDebugLogging) {
+        DebugLog(@"ClockCustomizer (old-lockscreen fork) loaded on iOS %@.", [[UIDevice currentDevice] systemVersion]);
+    }
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                     NULL,
+                                     (CFNotificationCallback)ReloadPrefsAndFonts,
+                                     CFSTR("com.yourname.clockcustomizer/reload"),
+                                     NULL,
+                                     CFNotificationSuspensionBehaviorDeliverImmediately);
 }
